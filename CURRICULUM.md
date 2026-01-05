@@ -221,6 +221,36 @@ Modern IDEs provide:
 
 ## PHASE 1: Rust Fundamentals (Weeks 1-3)
 
+### 1.0 Building Blocks: Functions, Types, and Structs
+
+Before diving into ownership, learn Rust's basic building blocks:
+
+- **Primitive Data Types**
+  - Integers (i32, u64, i8, etc.)
+  - Floating point (f32, f64)
+  - Booleans and characters
+  - Strings and string slices (&str)
+  - Type inference
+
+- **Creating Functions**
+  - Function parameters and return types
+  - Return values with and without semicolons
+  - Functions as expressions
+  - Basic error handling in functions
+
+- **Creating Structs**
+  - Defining struct types
+  - Creating instances
+  - Accessing fields
+  - Mutable structs
+
+- **Impl Blocks and Methods**
+  - Adding methods to structs with `impl`
+  - Methods with `&self` (borrow)
+  - Methods with `&mut self` (mutable borrow)
+  - Associated functions
+  - The `self` keyword and ownership
+
 ### 1.1 Core Language Concepts
 
 Master the foundational concepts that make Rust unique:

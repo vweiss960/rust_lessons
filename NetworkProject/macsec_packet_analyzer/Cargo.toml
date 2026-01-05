@@ -1,0 +1,17 @@
+[package]
+name = "macsec_packet_analyzer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+byteorder = "1.5"
+thiserror = "1.0"
+pcap = { version = "0.8", optional = true }
+
+[[bin]]
+name = "macsec_packet_analyzer"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["pcap"]
