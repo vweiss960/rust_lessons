@@ -24,11 +24,15 @@ tower-http = { version = "0.5", optional = true }
 name = "macsec_packet_analyzer"
 required-features = ["cli"]
 
+[[bin]]
+name = "async_live_analyzer"
+required-features = ["rest-api"]
+
 [features]
 default = []
 cli = ["pcap"]
 async = ["tokio", "dashmap", "crossbeam", "libc"]
-rest-api = ["async", "serde", "serde_json", "rusqlite", "chrono", "axum", "tower", "tower-http"]
+rest-api = ["async", "pcap", "serde", "serde_json", "rusqlite", "chrono", "axum", "tower", "tower-http"]
 napatech = ["async"]
 
 # Napatech NTAPI linking configuration

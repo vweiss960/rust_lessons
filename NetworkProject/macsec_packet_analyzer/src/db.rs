@@ -215,8 +215,6 @@ impl Database {
 
     /// Store enhanced statistics for a flow
     pub fn insert_statistics(&mut self, stats: &FlowStats) -> Result<(), CaptureError> {
-        use std::collections::HashMap;
-
         let flow_id = stats.flow_id.to_string();
 
         // Format timestamps as ISO 8601
@@ -324,11 +322,11 @@ impl Database {
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                     .map(|dt| SystemTime::from(dt.with_timezone(&Utc)));
                 let min_inter_arrival = row.get::<_, Option<i64>>(11)?
-                    .map(std::time::Duration::from_micros);
+                    .map(|v| std::time::Duration::from_micros(v as u64));
                 let max_inter_arrival = row.get::<_, Option<i64>>(12)?
-                    .map(std::time::Duration::from_micros);
+                    .map(|v| std::time::Duration::from_micros(v as u64));
                 let avg_inter_arrival = row.get::<_, Option<i64>>(13)?
-                    .map(std::time::Duration::from_micros);
+                    .map(|v| std::time::Duration::from_micros(v as u64));
                 let protocol_distribution_str = row.get::<_, Option<String>>(14)?;
                 let protocol_distribution = protocol_distribution_str
                     .and_then(|s| serde_json::from_str(&s).ok())
@@ -392,11 +390,11 @@ impl Database {
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
                     .map(|dt| SystemTime::from(dt.with_timezone(&Utc)));
                 let min_inter_arrival = row.get::<_, Option<i64>>(11)?
-                    .map(std::time::Duration::from_micros);
+                    .map(|v| std::time::Duration::from_micros(v as u64));
                 let max_inter_arrival = row.get::<_, Option<i64>>(12)?
-                    .map(std::time::Duration::from_micros);
+                    .map(|v| std::time::Duration::from_micros(v as u64));
                 let avg_inter_arrival = row.get::<_, Option<i64>>(13)?
-                    .map(std::time::Duration::from_micros);
+                    .map(|v| std::time::Duration::from_micros(v as u64));
                 let protocol_distribution_str = row.get::<_, Option<String>>(14)?;
                 let protocol_distribution = protocol_distribution_str
                     .and_then(|s| serde_json::from_str(&s).ok())

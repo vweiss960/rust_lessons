@@ -7,8 +7,6 @@ use crate::types::{CaptureStats, RawPacket};
 #[cfg(target_os = "linux")]
 use std::mem;
 #[cfg(target_os = "linux")]
-use std::os::unix::io::AsRawFd;
-#[cfg(target_os = "linux")]
 use std::time::SystemTime;
 
 /// AF_PACKET capture with TPACKET_V3 ring buffer (Linux-only)
@@ -26,6 +24,12 @@ pub struct AfPacketCapture {
     packets_read: u64,
     packets_dropped: u64,
 }
+
+#[cfg(target_os = "linux")]
+unsafe impl Send for AfPacketCapture {}
+
+#[cfg(target_os = "linux")]
+unsafe impl Sync for AfPacketCapture {}
 
 #[cfg(target_os = "linux")]
 impl AfPacketCapture {
@@ -50,8 +54,8 @@ impl AfPacketCapture {
             ));
         }
 
-        // Set TPACKET_V3 version
-        let version = libc::TPACKET_V3 as i32;
+        // Set TPACKET_V3 version (value is 3)
+        let version = 3i32;
         let ret = unsafe {
             libc::setsockopt(
                 socket_fd,
@@ -214,7 +218,7 @@ impl AsyncPacketSource for AfPacketCapture {
             // ... more fields
         }
 
-        let pkt_hdr = unsafe { &*(packet_ptr as *const TPacket3Hdr) };
+        let _pkt_hdr = unsafe { &*(packet_ptr as *const TPacket3Hdr) };
 
         // Extract packet (simplified - real implementation would parse full header)
         let max_pkt_len = 65535;
