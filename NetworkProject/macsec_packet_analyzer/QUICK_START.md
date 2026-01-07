@@ -2,28 +2,34 @@
 
 ## What You Have
 
-A fully modular, production-ready Rust packet analyzer for detecting frame loss in MACsec traffic.
+A fully modular, production-ready Rust packet analyzer for detecting frame loss in network traffic.
 
 ## Key Features
 
-✅ Reads PCAP files
+✅ Analyzes PCAP files or live network interfaces
 ✅ Detects packet loss (gaps in packet numbers)
-✅ Handles multiple flows (by Secure Channel Identifier)
+✅ Supports multiple protocols: **MACsec**, **IPsec ESP**, **Generic L3 (TCP/UDP)**
+✅ Handles multiple flows (protocol-specific identifiers)
 ✅ Handles sequence wraparound (32-bit counter)
 ✅ Reorders out-of-order packets
+✅ REST API for querying results
+✅ Bandwidth and timing metrics
+✅ Async live packet capture
+✅ SQLite database persistence
 ✅ Modular architecture for extensibility
 
 ## Module Architecture
 
 ### The Three Core Abstractions
 
-1. **`PacketSource`** - Where packets come from
+1. **`PacketSource`** / **`AsyncPacketSource`** - Where packets come from
    - `FileCapture` - Reads from PCAP files
-   - Future: `LiveCapture` - Read from network interface
+   - `PcapLiveCapture` - Live capture from network interface (async)
 
 2. **`SequenceParser`** - Extract sequence numbers from packets
    - `MACsecParser` - Parses MACsec packet number field
-   - Future: `IPsecParser` - Parse IPsec sequence numbers
+   - `IPsecParser` - Parses IPsec ESP sequence numbers
+   - `GenericL3Parser` - Parses TCP/UDP 5-tuple flows
 
 3. **`PacketAnalyzer`** - Orchestrates analysis
    - Generic over `PacketSource` and `SequenceParser`
@@ -182,70 +188,102 @@ let report = analyzer.analyze()?;
 
 **That's it!** No changes to capture, analysis, or flow tracking needed.
 
-## Adding Live Capture Support
+## Live Network Packet Capture (Async)
 
-### Step 1: Create capture source (`src/capture/live.rs`)
+The `async_live_analyzer` binary provides a complete production-ready pipeline for live packet capture with async processing.
 
-```rust
-use pcap::Capture;
-use crate::types::{CaptureStats, RawPacket};
-use crate::error::CaptureError;
-use super::source::PacketSource;
+### Building the Live Analyzer
 
-pub struct LiveCapture {
-    capture: Capture<pcap::Active>,
-    packets_read: u64,
-}
-
-impl LiveCapture {
-    pub fn open(interface: &str) -> Result<Self, CaptureError> {
-        let capture = Capture::from_device(interface)
-            .map_err(|e| CaptureError::OpenFailed(e.to_string()))?
-            .promisc(true)
-            .snaplen(65535)
-            .open()
-            .map_err(|e| CaptureError::OpenFailed(e.to_string()))?;
-
-        Ok(Self {
-            capture,
-            packets_read: 0,
-        })
-    }
-}
-
-impl PacketSource for LiveCapture {
-    fn next_packet(&mut self) -> Result<Option<RawPacket>, CaptureError> {
-        // Similar to FileCapture implementation
-        // Returns packets from network interface
-    }
-
-    fn stats(&self) -> CaptureStats {
-        let stats = self.capture.stats().unwrap_or_default();
-        CaptureStats {
-            packets_received: stats.received as u64,
-            packets_dropped: stats.dropped as u64,
-        }
-    }
-}
+```bash
+# Build the async_live_analyzer binary
+cargo build --features rest-api --bin async_live_analyzer
 ```
 
-### Step 2: Export it (`src/capture/mod.rs`)
+### Running Live Capture
 
-```rust
-pub mod live;
-pub use live::LiveCapture;
+The binary accepts 4 arguments: interface, protocol, database path, capture method.
+
+```bash
+# Analyze MACsec traffic from eth0 and save to database
+cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap
+
+# Analyze IPsec traffic
+cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec live.db pcap
+
+# Analyze TCP/UDP flows
+cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
 ```
 
-### Step 3: Use it
+**Note**: Capture requires root/administrator privileges.
 
-```rust
-let source = LiveCapture::open("eth0")?;
-let parser = MACsecParser;
-let mut analyzer = PacketAnalyzer::new(source, parser);
-let report = analyzer.analyze()?;
+### Features of Live Analyzer
+
+- **Async Packet Processing**: Non-blocking packet reception with tokio
+- **Periodic Persistence**: Flushes statistics every 5 seconds or 10k packets
+- **Real-time Progress**: Displays packets/sec, gap count, flow count
+- **Graceful Shutdown**: Ctrl+C saves all data and prints final report
+- **Bandwidth Calculations**: Shows Mbps per flow
+- **Database Integration**: Stores all stats in SQLite for REST API queries
+
+### Example Output
+
+```
+Starting async packet analyzer
+  Interface: eth0
+  Protocol: macsec
+  Database: live.db
+  Capture: pcap
+
+PCAP capture started on interface 'eth0'
+Press Ctrl+C to stop and save results
+
+[12.3s] Packets: 125000, Gaps: 45, Flows: 3, Rate: 10163 pps
+[24.5s] Packets: 250000, Gaps: 87, Flows: 5, Rate: 10204 pps
+
+Shutdown signal received. Flushing data...
+Saving final statistics...
+
+=== Analysis Complete ===
+Total packets analyzed: 287451
+Total gaps detected: 125
+Elapsed time: 28.23s
+Packet rate: 10184 pps
+
+Flows analyzed: 7
+
+Flow ID                                            Packets           Bytes            Gaps      Bandwidth
+----------------------------------------------  ---------------  ---------------  ---------------  ---------------
+MACsec { sci: 0x001122334455 }                        51234       26234000           25      7.43 Mbps
+MACsec { sci: 0xaabbccddeeff01 }                      48912       24500000           48      6.92 Mbps
+...
+
+Results saved to database. Query with:
+  cargo run --features rest-api --bin api_server
 ```
 
-**Works with any protocol parser!**
+### Querying Results via REST API
+
+After running the live analyzer, start the API server:
+
+```bash
+cargo run --features rest-api --bin api_server
+```
+
+Then query the results:
+
+```bash
+# Get summary statistics
+curl http://localhost:8080/api/v1/stats/summary
+
+# List all flows with bandwidth
+curl "http://localhost:8080/api/v1/flows?limit=10&min_bandwidth_mbps=5"
+
+# Get specific flow details
+curl "http://localhost:8080/api/v1/flows/MACsec%20%7B%20sci:%200x001122334455%20%7D"
+
+# Get sequence gaps for a flow
+curl "http://localhost:8080/api/v1/flows/MACsec%20%7B%20sci:%200x001122334455%20%7D/gaps?limit=20"
+```
 
 ## Key Design Principles
 
@@ -402,13 +440,140 @@ FileCapture  MACsecParser
      Analysis Report
 ```
 
+## Testing the Live Capture
+
+### Prerequisites
+
+You need libpcap installed:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install libpcap-dev
+
+# macOS
+brew install libpcap
+
+# Fedora/RHEL
+sudo dnf install libpcap-devel
+```
+
+### Test Methods
+
+#### 1. Generate Test Traffic (Local Loopback)
+
+```bash
+# Terminal 1: Start listening on lo (loopback interface)
+sudo cargo run --features rest-api --bin async_live_analyzer -- lo generic test_lo.db pcap
+
+# Terminal 2: Generate TCP traffic
+for i in {1..1000}; do
+  curl http://localhost:9999 2>/dev/null || true
+done
+```
+
+#### 2. Replay PCAP File to Virtual Interface
+
+```bash
+# If you have a PCAP file, replay it to a virtual interface
+tcpreplay -i eth0 sample.pcap
+
+# Meanwhile, capture with analyzer
+sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec capture.db pcap
+```
+
+#### 3. Monitor Real Network Interface
+
+```bash
+# Monitor MACsec traffic on a real interface
+sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap
+
+# In another terminal, generate traffic on that network
+ping 192.168.1.1  # or other target
+```
+
+#### 4. Unit Tests
+
+```bash
+# Run all unit tests
+cargo test --features rest-api --lib
+
+# Run tests for specific module
+cargo test --features rest-api --lib analysis::flow
+cargo test --features rest-api --lib protocol::macsec
+cargo test --features rest-api --lib protocol::ipsec
+```
+
+### Verifying Results
+
+After running the analyzer:
+
+```bash
+# 1. Check the database was created
+ls -lh live.db
+
+# 2. Query the database directly with sqlite3
+sqlite3 live.db "SELECT flow_id, packets_received, total_bytes FROM flows LIMIT 5"
+
+# 3. Start the API server
+cargo run --features rest-api --bin api_server
+
+# 4. Query via REST (in another terminal)
+curl -s http://localhost:8080/api/v1/stats/summary | jq .
+
+# 5. Check flow details with bandwidth
+curl -s "http://localhost:8080/api/v1/flows?limit=5" | jq '.flows[] | {flow_id, bandwidth_mbps, packets_received}'
+```
+
+### Troubleshooting Live Capture
+
+**Permission Denied**: You need root/admin privileges
+```bash
+# Linux/macOS
+sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+
+# Windows (run as Administrator in PowerShell)
+cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+```
+
+**No packets captured**: Check the interface name
+```bash
+# List available interfaces
+ip link show                  # Linux
+ifconfig                      # macOS/Linux
+ipconfig                      # Windows
+netsh interface show interface  # Windows
+
+# Verify interface is up
+ip link show eth0
+```
+
+**Permission denied for database**: Run from a writable directory
+```bash
+cd /tmp
+sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
+```
+
+**libpcap not found**: Install development libraries
+```bash
+# Ubuntu
+sudo apt-get install libpcap-dev
+
+# macOS
+brew install libpcap
+
+# Fedora
+sudo dnf install libpcap-devel
+```
+
 ## Next Steps
 
 1. ✅ Build the library: `cargo build --lib`
 2. ✅ Review the architecture: See `ARCHITECTURE.md`
-3. 📝 Add IPsec support using the pattern above
-4. 🌐 Add live capture support using the pattern above
-5. 🧪 Write integration tests
-6. 📦 Consider making this a published crate
+3. ✅ Analyze PCAP files: `cargo run --features cli -- file.pcap`
+4. ✅ Capture live traffic: `sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap`
+5. ✅ Query results: `cargo run --features rest-api --bin api_server`
+6. 🧪 Write custom analysis (extend `FlowTracker`)
+7. 📊 Integrate with monitoring systems (use REST API)
+8. 📦 Consider making this a published crate
 
 Enjoy your modular packet analyzer! 🚀
