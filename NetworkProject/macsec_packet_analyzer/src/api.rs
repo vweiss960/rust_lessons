@@ -28,6 +28,26 @@ pub struct FlowResponse {
     pub last_sequence: Option<u32>,
     pub min_gap: Option<u32>,
     pub max_gap: Option<u32>,
+
+    // Enhanced statistics
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandwidth_mbps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_inter_arrival_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_inter_arrival_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_inter_arrival_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_distribution: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,6 +66,12 @@ pub struct SummaryResponse {
     pub total_gaps_detected: i64,
     pub total_lost_packets: i64,
     pub max_gap_size: i64,
+
+    // Enhanced statistics
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_bandwidth_mbps: Option<f64>,
 }
 
 /// Query parameters for pagination
@@ -55,8 +81,88 @@ pub struct PaginationParams {
     pub offset: Option<i64>,
 }
 
+/// Query parameters for advanced flow filtering
+#[derive(Debug, Deserialize)]
+pub struct FlowQueryParams {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub min_bytes: Option<u64>,
+    pub max_bytes: Option<u64>,
+    pub min_bandwidth_mbps: Option<f64>,
+    pub max_bandwidth_mbps: Option<f64>,
+}
+
 /// Shared database connection wrapped in Arc<Mutex<>>
 pub type SharedDb = Arc<Mutex<Database>>;
+
+/// Helper function to convert FlowStats to FlowResponse with calculated metrics
+fn flow_stats_to_response(stats: &crate::types::FlowStats) -> FlowResponse {
+    use std::time::SystemTime;
+
+    // Calculate duration from timestamps
+    let duration_seconds = stats
+        .first_timestamp
+        .zip(stats.last_timestamp)
+        .and_then(|(first, last)| {
+            last.duration_since(first)
+                .ok()
+                .map(|d| d.as_secs_f64())
+        });
+
+    // Calculate bandwidth in Mbps: (bytes * 8 bits/byte) / (seconds) / (1,000,000 bits/Mbps)
+    let bandwidth_mbps = stats
+        .total_bytes
+        .gt(&0)
+        .then_some(())
+        .zip(duration_seconds)
+        .map(|((), dur_secs)| {
+            if dur_secs > 0.0 {
+                (stats.total_bytes as f64 * 8.0) / dur_secs / 1_000_000.0
+            } else {
+                0.0
+            }
+        });
+
+    // Convert Duration to milliseconds
+    let min_inter_arrival_ms = stats.min_inter_arrival.map(|d| d.as_secs_f64() * 1000.0);
+    let max_inter_arrival_ms = stats.max_inter_arrival.map(|d| d.as_secs_f64() * 1000.0);
+    let avg_inter_arrival_ms = stats.avg_inter_arrival.map(|d| d.as_secs_f64() * 1000.0);
+
+    // Format timestamps as ISO 8601 strings
+    let first_timestamp = stats
+        .first_timestamp
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+    let last_timestamp = stats
+        .last_timestamp
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+
+    // Convert protocol distribution to JSON value if present
+    let protocol_distribution = if stats.protocol_distribution.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&stats.protocol_distribution).ok()
+    };
+
+    FlowResponse {
+        flow_id: stats.flow_id.to_string(),
+        packets_received: stats.packets_received,
+        gaps_detected: stats.gaps_detected,
+        total_lost_packets: stats.total_lost_packets,
+        first_sequence: stats.first_sequence,
+        last_sequence: stats.last_sequence,
+        min_gap: stats.min_gap,
+        max_gap: stats.max_gap,
+        total_bytes: Some(stats.total_bytes),
+        first_timestamp,
+        last_timestamp,
+        duration_seconds,
+        bandwidth_mbps,
+        min_inter_arrival_ms,
+        max_inter_arrival_ms,
+        avg_inter_arrival_ms,
+        protocol_distribution,
+    }
+}
 
 /// Create and start the REST API server
 ///
@@ -98,9 +204,10 @@ pub async fn start_server(
     println!("REST API server listening on http://{}", listen_addr);
     println!("Available endpoints:");
     println!("  GET /health - Health check");
-    println!("  GET /api/v1/stats/summary - Summary statistics");
-    println!("  GET /api/v1/flows - List all flows (with pagination)");
-    println!("  GET /api/v1/flows/:flow_id - Get flow details");
+    println!("  GET /api/v1/stats/summary - Summary statistics with bandwidth metrics");
+    println!("  GET /api/v1/flows - List all flows with enhanced statistics");
+    println!("    Query params: limit, offset, min_bytes, max_bytes, min_bandwidth_mbps, max_bandwidth_mbps");
+    println!("  GET /api/v1/flows/:flow_id - Get flow details with all metrics");
     println!("  GET /api/v1/flows/:flow_id/gaps - Get gaps for a flow");
 
     axum::serve(listener, app).await?;
@@ -115,12 +222,38 @@ async fn health_check() -> Json<Value> {
     }))
 }
 
-/// Get summary statistics across all flows
+/// Get summary statistics across all flows including bandwidth metrics
 async fn get_summary_stats(
     State(db): State<SharedDb>,
 ) -> Result<Json<SummaryResponse>, ApiError> {
     let db = db.lock().map_err(|_| ApiError::DatabaseLocked)?;
     let stats = db.get_summary_stats()?;
+
+    // Calculate aggregate statistics from all flows for bandwidth
+    let all_flows = db.get_flows(None, None)?;
+    let total_bytes: u64 = all_flows.iter().map(|f| f.total_bytes).sum();
+
+    // Calculate average bandwidth across all flows
+    let avg_bandwidth_mbps = if all_flows.is_empty() {
+        None
+    } else {
+        let total_duration: f64 = all_flows
+            .iter()
+            .filter_map(|f| {
+                f.first_timestamp.zip(f.last_timestamp).and_then(|(first, last)| {
+                    last.duration_since(first)
+                        .ok()
+                        .map(|d| d.as_secs_f64())
+                })
+            })
+            .sum();
+
+        if total_duration > 0.0 && total_bytes > 0 {
+            Some((total_bytes as f64 * 8.0) / total_duration / 1_000_000.0)
+        } else {
+            None
+        }
+    };
 
     Ok(Json(SummaryResponse {
         total_flows: stats.total_flows,
@@ -128,28 +261,48 @@ async fn get_summary_stats(
         total_gaps_detected: stats.total_gaps_detected,
         total_lost_packets: stats.total_lost_packets,
         max_gap_size: stats.max_gap_size,
+        total_bytes: if total_bytes > 0 { Some(total_bytes) } else { None },
+        avg_bandwidth_mbps,
     }))
 }
 
-/// List all flows with pagination
+/// List all flows with pagination and optional filtering
 async fn list_flows(
     State(db): State<SharedDb>,
-    Query(params): Query<PaginationParams>,
+    Query(params): Query<FlowQueryParams>,
 ) -> Result<Json<Value>, ApiError> {
     let db = db.lock().map_err(|_| ApiError::DatabaseLocked)?;
     let flows = db.get_flows(params.limit, params.offset)?;
 
     let flow_responses: Vec<FlowResponse> = flows
         .into_iter()
-        .map(|f| FlowResponse {
-            flow_id: f.flow_id.to_string(),
-            packets_received: f.packets_received,
-            gaps_detected: f.gaps_detected,
-            total_lost_packets: f.total_lost_packets,
-            first_sequence: f.first_sequence,
-            last_sequence: f.last_sequence,
-            min_gap: f.min_gap,
-            max_gap: f.max_gap,
+        .map(|f| flow_stats_to_response(&f))
+        .filter(|f| {
+            // Apply byte filtering
+            if let Some(min_bytes) = params.min_bytes {
+                if f.total_bytes.unwrap_or(0) < min_bytes {
+                    return false;
+                }
+            }
+            if let Some(max_bytes) = params.max_bytes {
+                if f.total_bytes.unwrap_or(0) > max_bytes {
+                    return false;
+                }
+            }
+
+            // Apply bandwidth filtering
+            if let Some(min_bw) = params.min_bandwidth_mbps {
+                if f.bandwidth_mbps.unwrap_or(0.0) < min_bw {
+                    return false;
+                }
+            }
+            if let Some(max_bw) = params.max_bandwidth_mbps {
+                if f.bandwidth_mbps.unwrap_or(0.0) > max_bw {
+                    return false;
+                }
+            }
+
+            true
         })
         .collect();
 
@@ -159,7 +312,7 @@ async fn list_flows(
     })))
 }
 
-/// Get detailed statistics for a specific flow
+/// Get detailed statistics for a specific flow with enhanced metrics
 async fn get_flow_detail(
     State(db): State<SharedDb>,
     Path(flow_id): Path<String>,
@@ -170,16 +323,7 @@ async fn get_flow_detail(
         .get_flow(&flow_id)?
         .ok_or(ApiError::FlowNotFound)?;
 
-    Ok(Json(FlowResponse {
-        flow_id: stats.flow_id.to_string(),
-        packets_received: stats.packets_received,
-        gaps_detected: stats.gaps_detected,
-        total_lost_packets: stats.total_lost_packets,
-        first_sequence: stats.first_sequence,
-        last_sequence: stats.last_sequence,
-        min_gap: stats.min_gap,
-        max_gap: stats.max_gap,
-    }))
+    Ok(Json(flow_stats_to_response(&stats)))
 }
 
 /// Get all sequence gaps for a specific flow
