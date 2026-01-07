@@ -137,6 +137,13 @@ impl FlowTracker {
                 *state.protocol_distribution.entry(*protocol).or_insert(0) += 1;
             }
 
+            // Skip gap detection for GenericL3 flows
+            // GenericL3Parser returns synthetic sequence numbers (all zeros)
+            // to enable flow tracking without gap detection
+            if let FlowId::GenericL3 { .. } = &flow_id {
+                return None;
+            }
+
             // Record first sequence number
             if state.first_sequence.is_none() {
                 state.first_sequence = Some(packet.sequence_number);
@@ -421,6 +428,13 @@ impl FlowTracker {
         // Track protocol distribution for GenericL3 flows
         if let FlowId::GenericL3 { protocol, .. } = &flow_id {
             *state.protocol_distribution.entry(*protocol).or_insert(0) += 1;
+        }
+
+        // Skip gap detection for GenericL3 flows
+        // GenericL3Parser returns synthetic sequence numbers (all zeros)
+        // to enable flow tracking without gap detection
+        if let FlowId::GenericL3 { .. } = &flow_id {
+            return None;
         }
 
         // Record first sequence

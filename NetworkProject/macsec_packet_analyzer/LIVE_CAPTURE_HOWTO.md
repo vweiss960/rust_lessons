@@ -36,10 +36,12 @@ sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec out.
 sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec out.db pcap
 ```
 
-### Capture TCP/UDP Traffic
+### Capture TCP/UDP Traffic (Gap detection disabled)
 ```bash
 sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic out.db pcap
 ```
+
+**Note**: Gap detection is disabled for TCP/UDP traffic. This command tracks flow statistics (packet count, bytes, bandwidth, timing metrics) but does not report gaps. Gap detection is unreliable for TCP/UDP because TCP sequence numbers track cumulative bytes, not packets, and permit retransmissions and out-of-order delivery.
 
 ### Monitor Loopback (no sudo, test only)
 ```bash
@@ -148,11 +150,13 @@ ip link show | grep "state UP"  # Linux
 ## What Gets Saved
 
 The SQLite database includes:
-- Per-flow statistics (packets, bytes, gaps)
+- Per-flow statistics (packets, bytes)
 - Timing metrics (inter-arrival times)
 - Bandwidth calculations
 - Protocol distribution
-- Sequence gap details
+- Sequence gap details **(MACsec and IPsec flows only)**
+
+**Note**: Generic L3 (TCP/UDP) flows have gap detection disabled and will not have entries in the sequence_gaps table. For these flows, focus on packet counts, bytes, and bandwidth metrics instead.
 
 Query it with:
 ```bash

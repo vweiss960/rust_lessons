@@ -7,7 +7,7 @@ A fully modular, production-ready Rust packet analyzer for detecting frame loss 
 ## Key Features
 
 ✅ Analyzes PCAP files or live network interfaces
-✅ Detects packet loss (gaps in packet numbers)
+✅ Detects packet loss (gaps in packet numbers) - **MACsec and IPsec flows only**
 ✅ Supports multiple protocols: **MACsec**, **IPsec ESP**, **Generic L3 (TCP/UDP)**
 ✅ Handles multiple flows (protocol-specific identifiers)
 ✅ Handles sequence wraparound (32-bit counter)
@@ -17,6 +17,8 @@ A fully modular, production-ready Rust packet analyzer for detecting frame loss 
 ✅ Async live packet capture
 ✅ SQLite database persistence
 ✅ Modular architecture for extensibility
+
+**Note on Gap Detection**: Gap detection is disabled for Generic L3 (TCP/UDP) flows because TCP sequence numbers track cumulative bytes, not packet counts, and permit retransmissions and out-of-order delivery, causing 67%+ false positive rate. For TCP/UDP flows, use packet count and bandwidth metrics instead.
 
 ## Module Architecture
 

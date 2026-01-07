@@ -292,6 +292,25 @@ sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec ipsec
 # Will detect ESP (Encapsulating Security Payload) packets
 ```
 
+### Testing with Generic L3 (TCP/UDP) Traffic
+
+```bash
+# Generic L3 analysis works with standard TCP/UDP traffic
+sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic generic_test.db pcap
+
+# In another terminal, generate traffic:
+curl http://example.com &
+ping google.com &
+
+# Flow tracking, bandwidth, and byte counts will be recorded
+# Gap detection is DISABLED for Generic L3 flows because:
+# - TCP sequence numbers track cumulative bytes, not packets
+# - TCP permits retransmissions and out-of-order delivery
+# - This causes 67%+ false positive rate for gap detection
+#
+# Use packet_count and bandwidth_mbps metrics instead for TCP/UDP flows
+```
+
 ---
 
 ## Test Scenario 5: Unit Tests

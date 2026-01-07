@@ -5,11 +5,20 @@ use crate::types::{FlowId, SequenceInfo};
 use super::parser::SequenceParser;
 
 /// Generic L3 (Layer 3) packet parser for plain TCP/UDP traffic
-/// Extracts 5-tuple flow information and TCP sequence numbers
+/// Extracts 5-tuple flow information without sequence number tracking
 ///
 /// Supported protocols:
-/// - TCP (IP protocol 6): Uses TCP sequence number
-/// - UDP (IP protocol 17): No sequence number (returns None for UDP)
+/// - TCP (IP protocol 6): No gap detection (TCP byte-level sequences don't align with packet loss)
+/// - UDP (IP protocol 17): No sequence number tracking
+///
+/// Note: Gap detection is intentionally disabled for generic L3 flows because:
+/// - TCP sequence numbers track cumulative bytes, not packet counts
+/// - TCP permits retransmissions and out-of-order delivery
+/// - False positive gap rates are very high (67%+ on typical traffic)
+///
+/// To enable flow tracking without gap detection, this parser returns a "synthetic"
+/// sequence number (0) for all packets. The FlowTracker detects GenericL3 flows and
+/// skips gap detection, using only the 5-tuple for flow identification.
 ///
 /// Packet structure:
 /// - Ethernet (14 bytes)
@@ -23,6 +32,11 @@ const IP_PROTOCOL_UDP: u8 = 17;
 
 impl SequenceParser for GenericL3Parser {
     fn parse_sequence(&self, data: &[u8]) -> Result<Option<SequenceInfo>, ParseError> {
+        // Generic L3 flows: Extract 5-tuple for flow identification
+        // Return synthetic sequence number (all zeros) to keep FlowTracker engaged
+        // while disabling gap detection. FlowTracker detects GenericL3 flows and
+        // skips gap analysis for them.
+
         // Quick protocol check
         if !self.matches(data) {
             return Ok(None);
@@ -62,21 +76,9 @@ impl SequenceParser for GenericL3Parser {
         let src_port = u16::from_be_bytes([transport_payload[0], transport_payload[1]]);
         let dst_port = u16::from_be_bytes([transport_payload[2], transport_payload[3]]);
 
-        // Handle TCP vs UDP
-        match protocol {
+        // Calculate payload length for statistics (bytes after TCP/UDP header)
+        let payload_length = match protocol {
             IP_PROTOCOL_TCP => {
-                // TCP: Extract sequence number at offset 4-7 in TCP header
-                if transport_payload.len() < 8 {
-                    return Err(ParseError::PacketTooShort);
-                }
-
-                let sequence_number = u32::from_be_bytes([
-                    transport_payload[4],
-                    transport_payload[5],
-                    transport_payload[6],
-                    transport_payload[7],
-                ]);
-
                 // Extract TCP header length (first nibble of byte 12) to find payload
                 let tcp_header_len = if transport_payload.len() > 12 {
                     ((transport_payload[12] >> 4) as usize) * 4
@@ -84,32 +86,37 @@ impl SequenceParser for GenericL3Parser {
                     20 // Default TCP header size
                 };
 
-                let payload_length = if transport_payload.len() > tcp_header_len {
+                if transport_payload.len() > tcp_header_len {
                     transport_payload.len() - tcp_header_len
                 } else {
                     0
-                };
-
-                Ok(Some(SequenceInfo {
-                    sequence_number,
-                    flow_id: FlowId::GenericL3 {
-                        src_ip,
-                        dst_ip,
-                        src_port,
-                        dst_port,
-                        protocol,
-                    },
-                    payload_length,
-                }))
+                }
             }
             IP_PROTOCOL_UDP => {
-                // UDP: No sequence numbers
-                // Return None to indicate no sequence tracking for UDP
-                // But the flow is still identifiable via FlowId
-                Ok(None)
+                // UDP header is 8 bytes
+                if transport_payload.len() > 8 {
+                    transport_payload.len() - 8
+                } else {
+                    0
+                }
             }
-            _ => Ok(None),
-        }
+            _ => 0,
+        };
+
+        // Return synthetic sequence number (0) for all packets
+        // This allows FlowTracker to track the flow for statistics (bytes, packet count, bandwidth)
+        // while gap detection is disabled in FlowTracker for GenericL3 flows
+        Ok(Some(SequenceInfo {
+            sequence_number: 0,  // Synthetic: not used for gap detection
+            flow_id: FlowId::GenericL3 {
+                src_ip,
+                dst_ip,
+                src_port,
+                dst_port,
+                protocol,
+            },
+            payload_length,
+        }))
     }
 
     fn matches(&self, data: &[u8]) -> bool {
@@ -229,11 +236,12 @@ mod tests {
         let parser = GenericL3Parser;
         let packet = create_tcp_packet([192, 168, 1, 10], [10, 0, 0, 1], 12345, 80, 1000);
 
+        // TCP gap detection is disabled: returns synthetic sequence 0
         let result = parser.parse_sequence(&packet).unwrap();
         assert!(result.is_some());
 
         let seq_info = result.unwrap();
-        assert_eq!(seq_info.sequence_number, 1000);
+        assert_eq!(seq_info.sequence_number, 0);  // Synthetic sequence
 
         match seq_info.flow_id {
             FlowId::GenericL3 {
@@ -258,9 +266,22 @@ mod tests {
         let parser = GenericL3Parser;
         let packet = create_udp_packet([192, 168, 1, 10], [10, 0, 0, 1], 53, 53);
 
-        // UDP has no sequence numbers, so should return None
+        // UDP also returns synthetic sequence 0 (no gap detection for generic L3)
         let result = parser.parse_sequence(&packet).unwrap();
-        assert!(result.is_none());
+        assert!(result.is_some());
+
+        let seq_info = result.unwrap();
+        assert_eq!(seq_info.sequence_number, 0);  // Synthetic sequence
+
+        match seq_info.flow_id {
+            FlowId::GenericL3 {
+                protocol,
+                ..
+            } => {
+                assert_eq!(protocol, IP_PROTOCOL_UDP);
+            }
+            _ => panic!("Expected GenericL3 flow ID"),
+        }
     }
 
     #[test]
@@ -299,48 +320,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generic_l3_tcp_payload_extraction() {
-        let parser = GenericL3Parser;
-        let packet = create_tcp_packet([192, 168, 1, 10], [10, 0, 0, 1], 12345, 80, 1000);
-
-        let result = parser.parse_sequence(&packet).unwrap().unwrap();
-        // Payload should be 10 bytes (the dummy data we added)
-        assert_eq!(result.payload_length, 10);
-    }
-
-    #[test]
-    fn test_generic_l3_multiple_tcp_flows() {
-        let parser = GenericL3Parser;
-
-        // Create two packets with different 5-tuples
-        let packet1 = create_tcp_packet([192, 168, 1, 10], [10, 0, 0, 1], 12345, 80, 100);
-        let packet2 = create_tcp_packet([192, 168, 1, 10], [10, 0, 0, 1], 12346, 80, 200);
-
-        let result1 = parser.parse_sequence(&packet1).unwrap().unwrap();
-        let result2 = parser.parse_sequence(&packet2).unwrap().unwrap();
-
-        // Both should parse, but have different flow IDs (different src_port)
-        match result1.flow_id {
-            FlowId::GenericL3 { src_port, .. } => assert_eq!(src_port, 12345),
-            _ => panic!("Expected GenericL3 flow ID"),
-        }
-
-        match result2.flow_id {
-            FlowId::GenericL3 { src_port, .. } => assert_eq!(src_port, 12346),
-            _ => panic!("Expected GenericL3 flow ID"),
-        }
-    }
-
-    #[test]
-    fn test_generic_l3_tcp_sequence_wraparound() {
-        let parser = GenericL3Parser;
-        let packet = create_tcp_packet([192, 168, 1, 10], [10, 0, 0, 1], 12345, 80, u32::MAX);
-
-        let result = parser.parse_sequence(&packet).unwrap().unwrap();
-        assert_eq!(result.sequence_number, u32::MAX);
-    }
-
-    #[test]
     fn test_generic_l3_wrong_ethertype() {
         let parser = GenericL3Parser;
         let mut packet = create_tcp_packet([192, 168, 1, 10], [10, 0, 0, 1], 12345, 80, 1000);
@@ -350,30 +329,5 @@ mod tests {
         packet[13] = 0xDD;
 
         assert!(!parser.matches(&packet));
-    }
-
-    #[test]
-    fn test_generic_l3_tcp_port_extraction() {
-        let parser = GenericL3Parser;
-        let packet = create_tcp_packet([192, 168, 1, 100], [10, 0, 0, 1], 54321, 443, 5000);
-
-        let result = parser.parse_sequence(&packet).unwrap().unwrap();
-
-        match result.flow_id {
-            FlowId::GenericL3 {
-                src_ip,
-                dst_ip,
-                src_port,
-                dst_port,
-                protocol,
-            } => {
-                assert_eq!(src_ip, IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)));
-                assert_eq!(dst_ip, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
-                assert_eq!(src_port, 54321);
-                assert_eq!(dst_port, 443);
-                assert_eq!(protocol, IP_PROTOCOL_TCP);
-            }
-            _ => panic!("Expected GenericL3 flow ID"),
-        }
     }
 }

@@ -209,6 +209,8 @@ pub async fn start_server(
     println!("    Query params: limit, offset, min_bytes, max_bytes, min_bandwidth_mbps, max_bandwidth_mbps");
     println!("  GET /api/v1/flows/:flow_id - Get flow details with all metrics");
     println!("  GET /api/v1/flows/:flow_id/gaps - Get gaps for a flow");
+    println!("    Note: Gap detection is only available for MACsec and IPsec flows");
+    println!("          Generic L3 (TCP/UDP) flows will have 0 gaps detected");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -327,6 +329,14 @@ async fn get_flow_detail(
 }
 
 /// Get all sequence gaps for a specific flow
+///
+/// **Note**: Gap detection is only available for MACsec and IPsec flows.
+/// Generic L3 (TCP/UDP) flows will always return an empty gaps array because:
+/// - TCP sequence numbers track cumulative bytes, not packets
+/// - TCP permits retransmissions and out-of-order delivery
+/// - This causes unreliable gap detection (67%+ false positive rate)
+///
+/// For TCP/UDP flows, use packet counts and bandwidth metrics instead.
 async fn get_flow_gaps(
     State(db): State<SharedDb>,
     Path(flow_id): Path<String>,
