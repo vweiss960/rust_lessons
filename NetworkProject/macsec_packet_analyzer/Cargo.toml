@@ -26,10 +26,9 @@ required-features = ["cli"]
 
 [[bin]]
 name = "async_live_analyzer"
-required-features = ["rest-api"]
 
 [features]
-default = []
+default = ["rest-api"]
 cli = ["pcap"]
 async = ["tokio", "dashmap", "crossbeam", "libc"]
 rest-api = ["async", "pcap", "serde", "serde_json", "rusqlite", "chrono", "axum", "tower", "tower-http"]

@@ -1,4 +1,3 @@
-#![cfg(feature = "rest-api")]
 //! Async Live Packet Analyzer
 //!
 //! Captures packets from a live network interface, analyzes them for sequence gaps,
@@ -6,12 +5,13 @@
 //! (PCAP or AF_PACKET on Linux) and protocol parsing (MACsec, IPsec, Generic L3).
 //!
 //! Usage:
-//!   cargo run --features rest-api --bin async_live_analyzer -- <interface> <protocol> <db_path> <capture_method>
+//!   cargo build --bin async_live_analyzer --release
+//!   ./target/release/async_live_analyzer <interface> <protocol> <db_path> <capture_method>
 //!
 //! Examples:
-//!   cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap
-//!   cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec live.db af_packet
-//!   cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
+//!   ./target/release/async_live_analyzer eth0 macsec live.db pcap
+//!   ./target/release/async_live_analyzer eth0 ipsec live.db af_packet
+//!   ./target/release/async_live_analyzer eth0 generic live.db pcap
 
 use macsec_packet_analyzer::{
     capture::{AsyncPacketSource, PcapLiveCapture},

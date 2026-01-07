@@ -11,15 +11,16 @@
 //!   }
 //!
 //! Usage:
-//!   cargo run --features "rest-api" --bin rest_api_server
-//!   cargo run --features "rest-api" --bin rest_api_server -- --config config.json
-//!   cargo run --features "rest-api" --bin rest_api_server -- --db mydata.db
-//!   cargo run --features "rest-api" --bin rest_api_server -- --port 8080
+//!   cargo build --bin rest_api_server --release
+//!   ./target/release/rest_api_server
+//!   ./target/release/rest_api_server --config config.json
+//!   ./target/release/rest_api_server --db mydata.db
+//!   ./target/release/rest_api_server --port 8080
 //!
 //! Examples:
-//!   cargo run --features "rest-api" --bin rest_api_server
-//!   cargo run --features "rest-api" --bin rest_api_server -- --db ./capture/results.db --port 8080
-//!   cargo run --features "rest-api" --bin rest_api_server -- --config ./etc/config.json
+//!   cargo run --bin rest_api_server
+//!   cargo run --bin rest_api_server -- --db ./capture/results.db --port 8080
+//!   cargo run --bin rest_api_server -- --config ./etc/config.json
 //!
 //! Then access the API at:
 //!   http://localhost:3000/health
@@ -32,7 +33,6 @@ use macsec_packet_analyzer::api;
 use macsec_packet_analyzer::config::Config;
 use std::env;
 
-#[cfg(feature = "rest-api")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
@@ -144,11 +144,4 @@ fn print_help() {
     eprintln!("  rest_api_server --db ./results.db");
     eprintln!("  rest_api_server --config prod.json --port 8080");
     eprintln!("  rest_api_server --db /data/analysis.db --host 0.0.0.0 --port 8080");
-}
-
-#[cfg(not(feature = "rest-api"))]
-fn main() {
-    eprintln!("This binary requires the 'rest-api' feature to be enabled.");
-    eprintln!("Please build with: cargo build --features rest-api");
-    std::process::exit(1);
 }
