@@ -2,10 +2,14 @@ pub mod flow;
 
 #[cfg(feature = "cli")]
 use crate::capture::PacketSource;
+#[cfg(feature = "cli")]
 use crate::error::AnalysisError;
+#[cfg(feature = "cli")]
 use crate::protocol::SequenceParser;
+#[cfg(feature = "cli")]
 use crate::types::{AnalyzedPacket, AnalysisReport};
 
+#[cfg(feature = "cli")]
 use self::flow::FlowTracker;
 
 /// Generic packet analyzer that works with any combination of:

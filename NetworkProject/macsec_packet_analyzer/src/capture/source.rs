@@ -12,3 +12,20 @@ pub trait PacketSource {
     /// Get statistics from the capture source
     fn stats(&self) -> CaptureStats;
 }
+
+/// Async packet source for high-performance concurrent processing
+#[cfg(feature = "async")]
+pub trait AsyncPacketSource: Send + Sync {
+    /// Get next packet asynchronously
+    async fn next_packet(&mut self) -> Result<Option<RawPacket>, CaptureError>;
+
+    /// Get capture statistics
+    fn stats(&self) -> CaptureStats;
+
+    /// Optional: Set BPF filter (for live captures)
+    fn set_filter(&mut self, _filter: &str) -> Result<(), CaptureError> {
+        Err(CaptureError::UnsupportedOperation(
+            "BPF filtering not supported by this source".to_string(),
+        ))
+    }
+}

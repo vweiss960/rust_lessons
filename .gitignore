@@ -296,3 +296,6 @@ test_*
 GENERATION_PROMPT.md
 LLM_GENERATION_PROMPTS.md
 
+*.db
+*.lock
+

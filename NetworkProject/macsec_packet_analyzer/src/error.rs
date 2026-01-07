@@ -10,6 +10,18 @@ pub enum CaptureError {
 
     #[error("No more packets")]
     NoMorePackets,
+
+    #[error("Unsupported operation: {0}")]
+    UnsupportedOperation(String),
+
+    #[error("XDP not available: {0}")]
+    XdpNotAvailable(String),
+
+    #[error("AF_PACKET error: {0}")]
+    AfPacketError(String),
+
+    #[error("Database error: {0}")]
+    DatabaseError(String),
 }
 
 #[derive(Error, Debug)]
