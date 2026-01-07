@@ -1,4 +1,4 @@
-#![cfg(feature = "rest-api")]
+#![cfg(any(feature = "rest-api", feature = "cli"))]
 //! Database persistence layer for packet analysis results
 //!
 //! Provides utilities to persist flow statistics and gap detections

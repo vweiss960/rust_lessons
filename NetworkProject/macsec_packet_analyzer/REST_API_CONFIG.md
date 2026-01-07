@@ -240,10 +240,10 @@ Use `--config` to specify a different path:
 
 ```bash
 # Terminal 1: Capture traffic to live.db
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic live.db pcap
 
 # Terminal 2: Start API server pointing to capture
-cargo run --features rest-api --bin rest_api_server -- --db live.db
+cargo run --bin rest_api_server -- --db live.db
 
 # Terminal 3: Query the API
 curl http://localhost:3000/api/v1/stats/summary | jq .
@@ -253,16 +253,16 @@ curl http://localhost:3000/api/v1/stats/summary | jq .
 
 ```bash
 # Capture 1
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec capture1.db pcap
+sudo cargo run --bin live_analyzer -- eth0 macsec capture1.db pcap
 
 # Capture 2
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth1 generic capture2.db pcap
+sudo cargo run --bin live_analyzer -- eth1 generic capture2.db pcap
 
 # Query Capture 1
-cargo run --features rest-api --bin rest_api_server -- --db capture1.db --port 3000 &
+cargo run --bin rest_api_server -- --db capture1.db --port 3000 &
 
 # Query Capture 2
-cargo run --features rest-api --bin rest_api_server -- --db capture2.db --port 3001 &
+cargo run --bin rest_api_server -- --db capture2.db --port 3001 &
 ```
 
 ### Remote Database

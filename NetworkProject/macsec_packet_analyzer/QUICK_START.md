@@ -192,13 +192,13 @@ let report = analyzer.analyze()?;
 
 ## Live Network Packet Capture (Async)
 
-The `async_live_analyzer` binary provides a complete production-ready pipeline for live packet capture with async processing.
+The `live_analyzer` binary provides a complete production-ready pipeline for live packet capture with async processing.
 
 ### Building the Live Analyzer
 
 ```bash
-# Build the async_live_analyzer binary
-cargo build --features rest-api --bin async_live_analyzer
+# Build the live_analyzer binary
+cargo build --bin live_analyzer
 ```
 
 ### Running Live Capture
@@ -207,13 +207,13 @@ The binary accepts 4 arguments: interface, protocol, database path, capture meth
 
 ```bash
 # Analyze MACsec traffic from eth0 and save to database
-cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap
+cargo run --bin live_analyzer -- eth0 macsec live.db pcap
 
 # Analyze IPsec traffic
-cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec live.db pcap
+cargo run --bin live_analyzer -- eth0 ipsec live.db pcap
 
 # Analyze TCP/UDP flows
-cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
+cargo run --bin live_analyzer -- eth0 generic live.db pcap
 ```
 
 **Note**: Capture requires root/administrator privileges.
@@ -230,7 +230,7 @@ cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db 
 ### Example Output
 
 ```
-Starting async packet analyzer
+Starting packet analyzer
   Interface: eth0
   Protocol: macsec
   Database: live.db
@@ -260,7 +260,7 @@ MACsec { sci: 0xaabbccddeeff01 }                      48912       24500000      
 ...
 
 Results saved to database. Query with:
-  cargo run --features rest-api --bin api_server
+  cargo run --bin api_server
 ```
 
 ### Querying Results via REST API
@@ -268,7 +268,7 @@ Results saved to database. Query with:
 After running the live analyzer, start the API server:
 
 ```bash
-cargo run --features rest-api --bin api_server
+cargo run --bin api_server
 ```
 
 Then query the results:
@@ -465,7 +465,7 @@ sudo dnf install libpcap-devel
 
 ```bash
 # Terminal 1: Start listening on lo (loopback interface)
-sudo cargo run --features rest-api --bin async_live_analyzer -- lo generic test_lo.db pcap
+sudo cargo run --bin live_analyzer -- lo generic test_lo.db pcap
 
 # Terminal 2: Generate TCP traffic
 for i in {1..1000}; do
@@ -480,14 +480,14 @@ done
 tcpreplay -i eth0 sample.pcap
 
 # Meanwhile, capture with analyzer
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec capture.db pcap
+sudo cargo run --bin live_analyzer -- eth0 macsec capture.db pcap
 ```
 
 #### 3. Monitor Real Network Interface
 
 ```bash
 # Monitor MACsec traffic on a real interface
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap
+sudo cargo run --bin live_analyzer -- eth0 macsec live.db pcap
 
 # In another terminal, generate traffic on that network
 ping 192.168.1.1  # or other target
@@ -497,12 +497,12 @@ ping 192.168.1.1  # or other target
 
 ```bash
 # Run all unit tests
-cargo test --features rest-api --lib
+cargo test --lib
 
 # Run tests for specific module
-cargo test --features rest-api --lib analysis::flow
-cargo test --features rest-api --lib protocol::macsec
-cargo test --features rest-api --lib protocol::ipsec
+cargo test --lib analysis::flow
+cargo test --lib protocol::macsec
+cargo test --lib protocol::ipsec
 ```
 
 ### Verifying Results
@@ -531,10 +531,10 @@ curl -s "http://localhost:8080/api/v1/flows?limit=5" | jq '.flows[] | {flow_id, 
 **Permission Denied**: You need root/admin privileges
 ```bash
 # Linux/macOS
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic test.db pcap
 
 # Windows (run as Administrator in PowerShell)
-cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+cargo run --bin live_analyzer -- eth0 generic test.db pcap
 ```
 
 **No packets captured**: Check the interface name
@@ -552,7 +552,7 @@ ip link show eth0
 **Permission denied for database**: Run from a writable directory
 ```bash
 cd /tmp
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic live.db pcap
 ```
 
 **libpcap not found**: Install development libraries
@@ -572,10 +572,10 @@ sudo dnf install libpcap-devel
 1. ✅ Build the library: `cargo build --lib`
 2. ✅ Review the architecture: See `ARCHITECTURE.md`
 3. ✅ Analyze PCAP files: `cargo run --features cli -- file.pcap`
-4. ✅ Capture live traffic: `sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec live.db pcap`
-5. ✅ Query results: `cargo run --features rest-api --bin api_server`
+4. ✅ Capture live traffic: `sudo cargo run --bin live_analyzer -- eth0 macsec live.db pcap`
+5. ✅ Query results: `cargo run --bin api_server`
 6. 🧪 Write custom analysis (extend `FlowTracker`)
 7. 📊 Integrate with monitoring systems (use REST API)
 8. 📦 Consider making this a published crate
 
-Enjoy your modular packet analyzer! 🚀
+Enjoy your modular packet analyzer!

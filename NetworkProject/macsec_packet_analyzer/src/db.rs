@@ -1,4 +1,4 @@
-#![cfg(feature = "rest-api")]
+#![cfg(any(feature = "rest-api", feature = "cli"))]
 //! SQLite database layer for storing and querying packet analysis results
 //!
 //! Supports both SQLite (development) and PostgreSQL (future) backends.
@@ -51,12 +51,12 @@ impl DatabaseConfig {
 
 /// Database abstraction layer
 /// Currently implements SQLite backend via rusqlite
-#[cfg(feature = "rest-api")]
+#[cfg(any(feature = "rest-api", feature = "cli"))]
 pub struct Database {
     conn: rusqlite::Connection,
 }
 
-#[cfg(feature = "rest-api")]
+#[cfg(any(feature = "rest-api", feature = "cli"))]
 impl Database {
     /// Open or create database connection
     pub fn open(config: &DatabaseConfig) -> Result<Self, CaptureError> {

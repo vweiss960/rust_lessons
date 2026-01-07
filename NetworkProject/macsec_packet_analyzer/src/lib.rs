@@ -10,16 +10,16 @@ pub mod error;
 pub mod protocol;
 pub mod types;
 
-// Database module for REST API feature
-#[cfg(feature = "rest-api")]
+// Database module available for CLI file analysis and REST API
+#[cfg(any(feature = "rest-api", feature = "cli"))]
 pub mod db;
 
 // REST API module for serving metrics
 #[cfg(feature = "rest-api")]
 pub mod api;
 
-// Database persistence integration
-#[cfg(feature = "rest-api")]
+// Database persistence integration available for CLI file analysis and REST API
+#[cfg(any(feature = "rest-api", feature = "cli"))]
 pub mod persist;
 
 // Configuration management for REST API

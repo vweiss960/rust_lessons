@@ -25,13 +25,22 @@ name = "macsec_packet_analyzer"
 required-features = ["cli"]
 
 [[bin]]
-name = "async_live_analyzer"
+name = "live_analyzer"
+required-features = ["async"]
+
+[[bin]]
+name = "pcap_analysis"
+required-features = ["cli"]
+
+[[bin]]
+name = "rest_api_server"
+required-features = ["rest-api"]
 
 [features]
-default = ["rest-api"]
-cli = ["pcap"]
-async = ["tokio", "dashmap", "crossbeam", "libc"]
-rest-api = ["async", "pcap", "serde", "serde_json", "rusqlite", "chrono", "axum", "tower", "tower-http"]
+default = ["cli", "async", "rest-api"]
+cli = ["pcap", "rusqlite", "chrono", "serde", "serde_json"]
+async = ["tokio", "dashmap", "crossbeam", "libc", "pcap", "rusqlite", "chrono", "serde", "serde_json"]
+rest-api = ["serde", "serde_json", "axum", "tower", "tower-http"]
 napatech = ["async"]
 
 # Napatech NTAPI linking configuration

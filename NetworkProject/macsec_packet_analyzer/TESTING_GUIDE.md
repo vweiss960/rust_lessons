@@ -1,6 +1,6 @@
-# Testing the Async Live Analyzer
+# Testing the Live Analyzer
 
-This guide provides detailed instructions for testing the `async_live_analyzer` binary with real or simulated network traffic.
+This guide provides detailed instructions for testing the `live_analyzer` binary with real or simulated network traffic.
 
 ## Prerequisites
 
@@ -64,20 +64,20 @@ sudo whoami               # Should output "root"
 cd /path/to/macsec_packet_analyzer
 
 # Build with all features
-cargo build --features rest-api --bin async_live_analyzer --release
+cargo build --bin live_analyzer --release
 
 # For testing, use debug build (faster to compile)
-cargo build --features rest-api --bin async_live_analyzer
+cargo build --bin live_analyzer
 ```
 
 ### Verify Build
 
 ```bash
 # Check binary exists
-ls -lh target/debug/async_live_analyzer
+ls -lh target/debug/live_analyzer
 
 # Test help message
-cargo run --features rest-api --bin async_live_analyzer -- --help 2>&1 || true
+cargo run --bin live_analyzer -- --help 2>&1 || true
 ```
 
 ## Test Scenario 1: Local Loopback Interface
@@ -88,12 +88,12 @@ cargo run --features rest-api --bin async_live_analyzer -- --help 2>&1 || true
 
 ```bash
 # Terminal 1: Start the analyzer on lo
-sudo cargo run --features rest-api --bin async_live_analyzer -- lo generic test_lo.db pcap
+sudo cargo run --bin live_analyzer -- lo generic test_lo.db pcap
 ```
 
 You should see:
 ```
-Starting async packet analyzer
+Starting packet analyzer
   Interface: lo
   Protocol: generic
   Database: test_lo.db
@@ -139,7 +139,7 @@ sqlite3 test_lo.db "SELECT COUNT(*) as flows FROM flows"
 sqlite3 test_lo.db "SELECT flow_id, packets_received, total_bytes FROM flows LIMIT 3"
 
 # Start API server
-cargo run --features rest-api --bin api_server
+cargo run --bin api_server
 
 # Query API (in another terminal)
 curl -s http://localhost:8080/api/v1/stats/summary | jq .
@@ -165,7 +165,7 @@ ip addr show
 
 ```bash
 # Terminal 1: Monitor eth0 for TCP/UDP traffic
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic capture_eth0.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic capture_eth0.db pcap
 ```
 
 ### Step 3: Generate Traffic
@@ -249,7 +249,7 @@ sudo tcpreplay -i eth0 --multiplier=10 test_traffic.pcap
 
 ```bash
 # Terminal 1: Start analyzer before replay
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic pcap_test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic pcap_test.db pcap
 
 # Terminal 2: Replay the PCAP after analyzer starts
 sudo tcpreplay -i eth0 test_traffic.pcap
@@ -274,7 +274,7 @@ sqlite3 pcap_test.db "SELECT flow_id, packets_received FROM flows"
 # This is advanced and requires specialized setup
 
 # If you have MACsec enabled on an interface:
-sudo cargo run --features rest-api --bin async_live_analyzer -- macsec_eth0 macsec macsec_test.db pcap
+sudo cargo run --bin live_analyzer -- macsec_eth0 macsec macsec_test.db pcap
 
 # Monitor the output for MACsec-specific flows
 ```
@@ -287,7 +287,7 @@ sudo cargo run --features rest-api --bin async_live_analyzer -- macsec_eth0 macs
 
 # First, establish an IPsec connection (VPN)
 # Then monitor:
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec ipsec_test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 ipsec ipsec_test.db pcap
 
 # Will detect ESP (Encapsulating Security Payload) packets
 ```
@@ -296,7 +296,7 @@ sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec ipsec
 
 ```bash
 # Generic L3 analysis works with standard TCP/UDP traffic
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic generic_test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic generic_test.db pcap
 
 # In another terminal, generate traffic:
 curl http://example.com &
@@ -319,7 +319,7 @@ ping google.com &
 
 ```bash
 # Test the entire library
-cargo test --features rest-api --lib
+cargo test --lib
 
 # Expected output:
 running 42 tests
@@ -335,29 +335,29 @@ test result: ok. 42 passed; 0 failed; 0 ignored
 
 ```bash
 # Test flow tracking (gap detection)
-cargo test --features rest-api --lib analysis::flow --
+cargo test --lib analysis::flow --
 
 # Test MACsec parser
-cargo test --features rest-api --lib protocol::macsec --
+cargo test --lib protocol::macsec --
 
 # Test IPsec parser
-cargo test --features rest-api --lib protocol::ipsec --
+cargo test --lib protocol::ipsec --
 
 # Test Generic L3 parser
-cargo test --features rest-api --lib protocol::generic_l3 --
+cargo test --lib protocol::generic_l3 --
 
 # Test database operations
-cargo test --features rest-api --lib db --
+cargo test --lib db --
 ```
 
 ### Run Specific Test
 
 ```bash
 # Run one test by name
-cargo test --features rest-api --lib test_gap_detection -- --exact
+cargo test --lib test_gap_detection -- --exact
 
 # Run tests matching a pattern
-cargo test --features rest-api --lib gap --
+cargo test --lib gap --
 ```
 
 ---
@@ -368,13 +368,13 @@ cargo test --features rest-api --lib gap --
 
 ```bash
 # Terminal 1: Run analyzer for a bit
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic api_test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic api_test.db pcap
 
 # Generate traffic while running (see Step 3 above)
 # Press Ctrl+C after 30 seconds
 
 # Terminal 2: Start API server
-cargo run --features rest-api --bin api_server
+cargo run --bin api_server
 ```
 
 ### Test API Endpoints
@@ -427,7 +427,7 @@ curl -s http://localhost:8080/api/v1/flows | jq '.flows[0] | keys'
 
 ```bash
 # Run analyzer and observe packet rate
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic perf_test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic perf_test.db pcap
 
 # Expected output:
 [10.0s] Packets: 50000, Gaps: 0, Flows: 20, Rate: 5000 pps    ← pps = packets/sec
@@ -467,7 +467,7 @@ error opening interface: Operation not permitted
 
 **Solution**: Run with sudo
 ```bash
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic test.db pcap
 ```
 
 ### Issue: No Packets Captured
@@ -508,12 +508,12 @@ Failed to lock database
 **Solution**: Ensure only one process accesses the database
 ```bash
 # Kill any lingering processes
-pkill -f async_live_analyzer
+pkill -f live_analyzer
 pkill -f api_server
 
 # Remove old database and retry
 rm test.db
-cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+cargo run --bin live_analyzer -- eth0 generic test.db pcap
 ```
 
 ### Issue: libpcap Not Found
@@ -526,7 +526,7 @@ error: failed to run custom build command for `pcap`
 ```bash
 sudo apt-get install libpcap-dev
 cargo clean
-cargo build --features rest-api --bin async_live_analyzer
+cargo build --bin live_analyzer
 ```
 
 ### Issue: Out of Memory
@@ -557,19 +557,19 @@ echo ""
 
 # Build
 echo "1. Building binary..."
-cargo build --features rest-api --bin async_live_analyzer --release
+cargo build --bin live_analyzer --release
 echo "   ✓ Build successful"
 echo ""
 
 # Unit tests
 echo "2. Running unit tests..."
-cargo test --features rest-api --lib --release
+cargo test --lib --release
 echo "   ✓ Tests passed"
 echo ""
 
 # Loopback test
 echo "3. Testing local loopback capture..."
-timeout 15 sudo cargo run --features rest-api --bin async_live_analyzer --release -- lo generic test_lo.db pcap &
+timeout 15 sudo cargo run --bin live_analyzer --release -- lo generic test_lo.db pcap &
 sleep 2
 for i in {1..100}; do echo "test" | nc -q 1 127.0.0.1 8765 2>/dev/null || true; done
 wait
@@ -622,4 +622,4 @@ A successful test run should demonstrate:
 ✅ Graceful shutdown with Ctrl+C
 ✅ Final report includes all flows
 
-If all criteria are met, the async_live_analyzer is working correctly!
+If all criteria are met, the live_analyzer is working correctly!

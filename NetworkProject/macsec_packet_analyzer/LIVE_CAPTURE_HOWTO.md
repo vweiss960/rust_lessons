@@ -9,10 +9,10 @@ Fast reference for capturing and analyzing live network traffic.
 sudo apt-get install libpcap-dev
 
 # 2. Build (one time)
-cargo build --features rest-api --bin async_live_analyzer --release
+cargo build --bin live_analyzer --release
 
 # 3. Start capturing (requires sudo)
-sudo cargo run --features rest-api --bin async_live_analyzer --release -- eth0 generic live.db pcap
+sudo cargo run --bin live_analyzer --release -- eth0 generic live.db pcap
 
 # 4. Generate traffic in another terminal
 ping example.com &
@@ -20,7 +20,7 @@ ping example.com &
 # 5. Press Ctrl+C to stop and see results
 
 # 6. Query results with API
-cargo run --features rest-api --bin api_server &
+cargo run --bin api_server &
 curl http://localhost:8080/api/v1/stats/summary | jq .
 ```
 
@@ -28,24 +28,24 @@ curl http://localhost:8080/api/v1/stats/summary | jq .
 
 ### Capture MACsec Traffic
 ```bash
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 macsec out.db pcap
+sudo cargo run --bin live_analyzer -- eth0 macsec out.db pcap
 ```
 
 ### Capture IPsec Traffic
 ```bash
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 ipsec out.db pcap
+sudo cargo run --bin live_analyzer -- eth0 ipsec out.db pcap
 ```
 
 ### Capture TCP/UDP Traffic (Gap detection disabled)
 ```bash
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic out.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic out.db pcap
 ```
 
 **Note**: Gap detection is disabled for TCP/UDP traffic. This command tracks flow statistics (packet count, bytes, bandwidth, timing metrics) but does not report gaps. Gap detection is unreliable for TCP/UDP because TCP sequence numbers track cumulative bytes, not packets, and permit retransmissions and out-of-order delivery.
 
 ### Monitor Loopback (no sudo, test only)
 ```bash
-cargo run --features rest-api --bin async_live_analyzer -- lo generic test.db pcap
+cargo run --bin live_analyzer -- lo generic test.db pcap
 ```
 
 ## View Results
@@ -78,7 +78,7 @@ sqlite3 live.db "SELECT flow_id, packets_received, total_bytes FROM flows"
 ### REST API
 ```bash
 # Start API server
-cargo run --features rest-api --bin api_server
+cargo run --bin api_server
 
 # Query in another terminal
 curl http://localhost:8080/api/v1/stats/summary | jq .
@@ -88,7 +88,7 @@ curl "http://localhost:8080/api/v1/flows?limit=10" | jq .
 ## Arguments Explained
 
 ```
-async_live_analyzer <interface> <protocol> <db_path> <capture_method>
+live_analyzer <interface> <protocol> <db_path> <capture_method>
 ```
 
 - **interface**: Network interface name (eth0, wlan0, lo, etc.)
@@ -111,11 +111,11 @@ Live capture requires elevated privileges:
 
 ```bash
 # Linux/macOS - use sudo
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic out.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic out.db pcap
 
 # Windows - run as Administrator
 # Open PowerShell as Administrator, then:
-cargo run --features rest-api --bin async_live_analyzer -- eth0 generic out.db pcap
+cargo run --bin live_analyzer -- eth0 generic out.db pcap
 ```
 
 ## Find Your Interface
@@ -181,7 +181,7 @@ Example combining all three:
 
 ```bash
 # 1. Capture
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic test.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic test.db pcap
 
 # 2. Stop with Ctrl+C (see terminal report)
 
@@ -189,7 +189,7 @@ sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic tes
 sqlite3 test.db "SELECT flow_id, total_bytes FROM flows ORDER BY total_bytes DESC LIMIT 5"
 
 # 4. Start API server
-cargo run --features rest-api --bin api_server
+cargo run --bin api_server
 
 # 5. Get JSON results
 curl http://localhost:8080/api/v1/flows | jq '.flows[] | select(.bandwidth_mbps > 1)'

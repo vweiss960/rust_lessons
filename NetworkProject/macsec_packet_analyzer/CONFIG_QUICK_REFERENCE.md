@@ -72,10 +72,10 @@ cargo run --features rest-api --bin rest_api_server -- \
 
 ```bash
 # Terminal 1: Capture to live.db
-sudo cargo run --features rest-api --bin async_live_analyzer -- eth0 generic live.db pcap
+sudo cargo run --bin live_analyzer -- eth0 generic live.db pcap
 
 # Terminal 2: Query with REST API pointing to live.db
-cargo run --features rest-api --bin rest_api_server -- --db live.db
+cargo run --bin rest_api_server -- --db live.db
 
 # Terminal 3: Use the API
 curl http://localhost:3000/api/v1/stats/summary | jq .

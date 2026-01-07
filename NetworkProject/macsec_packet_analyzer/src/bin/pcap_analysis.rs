@@ -1,19 +1,18 @@
-#![cfg_attr(not(all(feature = "cli", feature = "rest-api")), allow(dead_code))]
 //! Packet analyzer with database persistence
 //!
-//! This example demonstrates analyzing packets and persisting results to SQLite database.
+//! Analyzes packets from PCAP files and persists results to SQLite database.
 //! The results can then be queried via the REST API server.
 //!
 //! Usage:
-//!   cargo run --features "cli,rest-api" --bin analyze_with_db -- [pcap_file]
+//!   cargo build --bin pcap_analysis --release
+//!   ./target/release/pcap_analysis [pcap_file]
 //!
 //! Example:
-//!   cargo run --features "cli,rest-api" --bin analyze_with_db -- macsec_traffic.pcap
+//!   cargo run --bin pcap_analysis -- macsec_traffic.pcap
+//!   ./target/release/pcap_analysis macsec_traffic.pcap
 //!
 //! Then run the REST API server to query the results:
-//!   cargo run --features "rest-api" --bin rest_api_server
-
-#[cfg(all(feature = "cli", feature = "rest-api"))]
+//!   cargo run --bin rest_api_server
 use macsec_packet_analyzer::{
     analysis::flow::FlowTracker,
     capture::{FileCapture, PacketSource},
@@ -22,12 +21,9 @@ use macsec_packet_analyzer::{
     protocol::{MACsecParser, SequenceParser},
     persist::PersistenceManager,
 };
-#[cfg(all(feature = "cli", feature = "rest-api"))]
 use std::env;
-#[cfg(all(feature = "cli", feature = "rest-api"))]
 use std::sync::Arc;
 
-#[cfg(all(feature = "cli", feature = "rest-api"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get pcap file path from command line or use default
     let pcap_file = env::args()
@@ -47,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let persistence = PersistenceManager::new(Arc::clone(&db));
 
     // Create flow tracker and parser
-    let tracker = FlowTracker::new();
+    let mut tracker = FlowTracker::new();
     let parser = MACsecParser;
 
     // Open pcap file
@@ -138,14 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\nYou can now query the results using the REST API server:");
-    println!("  cargo run --features rest-api --bin rest_api_server");
+    println!("  cargo run --bin rest_api_server");
 
     Ok(())
-}
-
-#[cfg(not(all(feature = "cli", feature = "rest-api")))]
-fn main() {
-    eprintln!("This binary requires both 'cli' and 'rest-api' features to be enabled.");
-    eprintln!("Please build with: cargo build --features cli,rest-api");
-    std::process::exit(1);
 }
