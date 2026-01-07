@@ -22,6 +22,10 @@ pub mod api;
 #[cfg(feature = "rest-api")]
 pub mod persist;
 
+// Configuration management for REST API
+#[cfg(feature = "rest-api")]
+pub mod config;
+
 // Re-export commonly used public API
 #[cfg(feature = "cli")]
 pub use analysis::PacketAnalyzer;

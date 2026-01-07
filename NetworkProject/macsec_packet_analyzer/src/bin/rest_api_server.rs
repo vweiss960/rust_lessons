@@ -1,14 +1,25 @@
 //! REST API server for packet analysis results
 //!
 //! This binary starts a REST API server that serves packet analysis statistics
-//! from a SQLite database. It demonstrates database integration with the analyzer.
+//! from a SQLite database configured via config.json.
+//!
+//! Configuration:
+//!   Create a config.json file in the current directory with:
+//!   {
+//!     "database": {"path": "your_database.db"},
+//!     "server": {"host": "127.0.0.1", "port": 3000}
+//!   }
 //!
 //! Usage:
-//!   cargo run --features "rest-api" --bin rest_api_server -- [port]
+//!   cargo run --features "rest-api" --bin rest_api_server
+//!   cargo run --features "rest-api" --bin rest_api_server -- --config config.json
+//!   cargo run --features "rest-api" --bin rest_api_server -- --db mydata.db
+//!   cargo run --features "rest-api" --bin rest_api_server -- --port 8080
 //!
 //! Examples:
 //!   cargo run --features "rest-api" --bin rest_api_server
-//!   cargo run --features "rest-api" --bin rest_api_server -- 8080
+//!   cargo run --features "rest-api" --bin rest_api_server -- --db ./capture/results.db --port 8080
+//!   cargo run --features "rest-api" --bin rest_api_server -- --config ./etc/config.json
 //!
 //! Then access the API at:
 //!   http://localhost:3000/health
@@ -18,21 +29,83 @@
 
 use macsec_packet_analyzer::db::DatabaseConfig;
 use macsec_packet_analyzer::api;
+use macsec_packet_analyzer::config::Config;
 use std::env;
 
 #[cfg(feature = "rest-api")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get port from command line or use default
-    let port = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "3000".to_string());
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
 
-    let listen_addr = format!("127.0.0.1:{}", port);
+    // Load base configuration from file or defaults
+    let mut config = Config::from_file_or_default("config.json");
+
+    // Parse command line overrides
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" => {
+                if i + 1 < args.len() {
+                    config = Config::from_file_or_default(&args[i + 1]);
+                    i += 2;
+                } else {
+                    eprintln!("Error: --config requires a path argument");
+                    std::process::exit(1);
+                }
+            }
+            "--db" | "--database" => {
+                if i + 1 < args.len() {
+                    config = config.with_db_path(&args[i + 1]);
+                    i += 2;
+                } else {
+                    eprintln!("Error: --db requires a path argument");
+                    std::process::exit(1);
+                }
+            }
+            "--port" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u16>() {
+                        Ok(port) => config = config.with_port(port),
+                        Err(_) => {
+                            eprintln!("Error: Invalid port number: {}", args[i + 1]);
+                            std::process::exit(1);
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("Error: --port requires a number argument");
+                    std::process::exit(1);
+                }
+            }
+            "--host" => {
+                if i + 1 < args.len() {
+                    config = config.with_host(&args[i + 1]);
+                    i += 2;
+                } else {
+                    eprintln!("Error: --host requires a value argument");
+                    std::process::exit(1);
+                }
+            }
+            "--help" | "-h" => {
+                print_help();
+                return Ok(());
+            }
+            _ => {
+                eprintln!("Unknown argument: {}", args[i]);
+                print_help();
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let listen_addr = config.listen_addr();
+    let db_path = config.database.path.clone();
 
     println!("Starting REST API server...");
-    println!("Database: analysis.db (SQLite)");
-    println!("Listen address: http://{}", listen_addr);
+    println!("Configuration:");
+    println!("  Database: {} (SQLite)", db_path);
+    println!("  Listen address: http://{}", listen_addr);
     println!();
     println!("Endpoints:");
     println!("  GET /health                       - Health check");
@@ -44,13 +117,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    ?limit=10&offset=0");
     println!();
 
-    // Use default SQLite database
-    let db_config = DatabaseConfig::sqlite_default();
+    // Use configured database path
+    let db_config = DatabaseConfig::sqlite(db_path);
 
     // Start the REST API server
     api::start_server(db_config, &listen_addr).await?;
 
     Ok(())
+}
+
+/// Print help message
+fn print_help() {
+    eprintln!("REST API Server for Packet Analysis");
+    eprintln!();
+    eprintln!("Usage: rest_api_server [OPTIONS]");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --config <PATH>     Load configuration from JSON file (default: config.json)");
+    eprintln!("  --db <PATH>         Override database path");
+    eprintln!("  --port <NUM>        Override server port (default: 3000)");
+    eprintln!("  --host <HOST>       Override server host (default: 127.0.0.1)");
+    eprintln!("  --help, -h          Show this help message");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  rest_api_server");
+    eprintln!("  rest_api_server --db ./results.db");
+    eprintln!("  rest_api_server --config prod.json --port 8080");
+    eprintln!("  rest_api_server --db /data/analysis.db --host 0.0.0.0 --port 8080");
 }
 
 #[cfg(not(feature = "rest-api"))]
