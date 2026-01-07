@@ -12,7 +12,7 @@ A production-ready Rust library and CLI tool for analyzing MACsec packet capture
 ✅ **Wraparound Handling** - Correctly process 32-bit sequence number wraparound
 ✅ **Modular Architecture** - Easy to extend with new protocols and capture sources
 ✅ **Type-Safe** - Leverages Rust's type system for correctness
-✅ **Well-Documented** - Comprehensive documentation and examples
+✅ **Well-Documented** - Comprehensive documentation and examples 
 
 ## Quick Start
 

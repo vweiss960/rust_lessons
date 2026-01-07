@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
-#[cfg(not(feature = "async"))]
-use std::collections::HashMap;
-use std::time::SystemTime;
+use std::collections::{BTreeMap, HashMap};
+use std::time::{SystemTime, Duration};
 
 #[cfg(feature = "async")]
 use dashmap::DashMap;
@@ -37,6 +35,17 @@ struct FlowState {
     last_sequence: Option<u32>,
     min_gap: Option<u32>,
     max_gap: Option<u32>,
+
+    // Enhanced statistics
+    total_bytes: u64,
+    first_timestamp: Option<SystemTime>,
+    last_timestamp: Option<SystemTime>,
+    previous_timestamp: Option<SystemTime>,  // For inter-arrival calculation
+    min_inter_arrival_us: Option<u64>,       // Microseconds
+    max_inter_arrival_us: Option<u64>,
+    total_inter_arrival_us: u64,             // For average calculation
+    inter_arrival_count: u64,                // Number of inter-arrival measurements
+    protocol_distribution: HashMap<u8, u64>, // For GenericL3 flows
 }
 
 impl FlowState {
@@ -51,6 +60,16 @@ impl FlowState {
             last_sequence: None,
             min_gap: None,
             max_gap: None,
+            // Enhanced statistics initialization
+            total_bytes: 0,
+            first_timestamp: None,
+            last_timestamp: None,
+            previous_timestamp: None,
+            min_inter_arrival_us: None,
+            max_inter_arrival_us: None,
+            total_inter_arrival_us: 0,
+            inter_arrival_count: 0,
+            protocol_distribution: HashMap::new(),
         }
     }
 }
@@ -85,6 +104,38 @@ impl FlowTracker {
         {
             let state = self.flows.get_mut(&flow_id).unwrap();
             state.packets_received += 1;
+
+            // Track bytes received
+            state.total_bytes += packet.payload_length as u64;
+
+            // Track inter-arrival times
+            if let Some(previous) = state.last_timestamp {
+                if let Ok(duration) = packet.timestamp.duration_since(previous) {
+                    let duration_us = duration.as_micros() as u64;
+
+                    // Update min/max inter-arrival times
+                    if state.min_inter_arrival_us.is_none() || duration_us < state.min_inter_arrival_us.unwrap() {
+                        state.min_inter_arrival_us = Some(duration_us);
+                    }
+                    if state.max_inter_arrival_us.is_none() || duration_us > state.max_inter_arrival_us.unwrap() {
+                        state.max_inter_arrival_us = Some(duration_us);
+                    }
+
+                    state.total_inter_arrival_us += duration_us;
+                    state.inter_arrival_count += 1;
+                }
+            }
+
+            // Track timestamps
+            if state.first_timestamp.is_none() {
+                state.first_timestamp = Some(packet.timestamp);
+            }
+            state.last_timestamp = Some(packet.timestamp);
+
+            // Track protocol distribution for GenericL3 flows
+            if let FlowId::GenericL3 { protocol, .. } = &flow_id {
+                *state.protocol_distribution.entry(*protocol).or_insert(0) += 1;
+            }
 
             // Record first sequence number
             if state.first_sequence.is_none() {
@@ -253,6 +304,19 @@ impl FlowTracker {
                     total_lost += gap.gap_size as u64;
                 }
 
+                // Calculate average inter-arrival time
+                let avg_inter_arrival = if state.inter_arrival_count > 0 {
+                    Some(Duration::from_micros(
+                        state.total_inter_arrival_us / state.inter_arrival_count,
+                    ))
+                } else {
+                    None
+                };
+
+                // Convert microseconds back to Duration for min/max
+                let min_inter_arrival = state.min_inter_arrival_us.map(Duration::from_micros);
+                let max_inter_arrival = state.max_inter_arrival_us.map(Duration::from_micros);
+
                 FlowStats {
                     flow_id: flow_id.clone(),
                     packets_received: state.packets_received,
@@ -262,6 +326,14 @@ impl FlowTracker {
                     last_sequence: state.last_sequence,
                     min_gap: state.min_gap,
                     max_gap: state.max_gap,
+                    // Enhanced statistics
+                    total_bytes: state.total_bytes,
+                    first_timestamp: state.first_timestamp,
+                    last_timestamp: state.last_timestamp,
+                    min_inter_arrival,
+                    max_inter_arrival,
+                    avg_inter_arrival,
+                    protocol_distribution: state.protocol_distribution.clone(),
                 }
             })
             .collect()
@@ -318,6 +390,38 @@ impl FlowTracker {
         let mut gap = None;
 
         state.packets_received += 1;
+
+        // Track bytes received
+        state.total_bytes += packet.payload_length as u64;
+
+        // Track inter-arrival times
+        if let Some(previous) = state.last_timestamp {
+            if let Ok(duration) = packet.timestamp.duration_since(previous) {
+                let duration_us = duration.as_micros() as u64;
+
+                // Update min/max inter-arrival times
+                if state.min_inter_arrival_us.is_none() || duration_us < state.min_inter_arrival_us.unwrap() {
+                    state.min_inter_arrival_us = Some(duration_us);
+                }
+                if state.max_inter_arrival_us.is_none() || duration_us > state.max_inter_arrival_us.unwrap() {
+                    state.max_inter_arrival_us = Some(duration_us);
+                }
+
+                state.total_inter_arrival_us += duration_us;
+                state.inter_arrival_count += 1;
+            }
+        }
+
+        // Track timestamps
+        if state.first_timestamp.is_none() {
+            state.first_timestamp = Some(packet.timestamp);
+        }
+        state.last_timestamp = Some(packet.timestamp);
+
+        // Track protocol distribution for GenericL3 flows
+        if let FlowId::GenericL3 { protocol, .. } = &flow_id {
+            *state.protocol_distribution.entry(*protocol).or_insert(0) += 1;
+        }
 
         // Record first sequence
         if state.first_sequence.is_none() {
@@ -404,6 +508,19 @@ impl FlowTracker {
                     total_lost += gap.gap_size as u64;
                 }
 
+                // Calculate average inter-arrival time
+                let avg_inter_arrival = if state.inter_arrival_count > 0 {
+                    Some(Duration::from_micros(
+                        state.total_inter_arrival_us / state.inter_arrival_count,
+                    ))
+                } else {
+                    None
+                };
+
+                // Convert microseconds back to Duration for min/max
+                let min_inter_arrival = state.min_inter_arrival_us.map(Duration::from_micros);
+                let max_inter_arrival = state.max_inter_arrival_us.map(Duration::from_micros);
+
                 FlowStats {
                     flow_id: flow_id.clone(),
                     packets_received: state.packets_received,
@@ -413,6 +530,14 @@ impl FlowTracker {
                     last_sequence: state.last_sequence,
                     min_gap: state.min_gap,
                     max_gap: state.max_gap,
+                    // Enhanced statistics
+                    total_bytes: state.total_bytes,
+                    first_timestamp: state.first_timestamp,
+                    last_timestamp: state.last_timestamp,
+                    min_inter_arrival,
+                    max_inter_arrival,
+                    avg_inter_arrival,
+                    protocol_distribution: state.protocol_distribution.clone(),
                 }
             })
             .collect()
@@ -526,5 +651,206 @@ mod tests {
         assert_eq!(stats[0].packets_received, 2);
         // Gap should be detected (expected 0, got 1)
         assert_eq!(stats[0].gaps_detected, 1);
+    }
+
+    #[test]
+    fn test_total_bytes_tracking() {
+        let mut tracker = FlowTracker::new();
+        let flow = FlowId::MACsec { sci: 0x5678 };
+
+        // Create packets with known payload lengths
+        let mut pkt1 = create_packet(1, flow.clone());
+        pkt1.payload_length = 100;
+        let mut pkt2 = create_packet(2, flow.clone());
+        pkt2.payload_length = 200;
+        let mut pkt3 = create_packet(3, flow.clone());
+        pkt3.payload_length = 150;
+
+        tracker.process_packet(pkt1);
+        tracker.process_packet(pkt2);
+        tracker.process_packet(pkt3);
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].total_bytes, 450); // 100 + 200 + 150
+    }
+
+    #[test]
+    fn test_timestamp_tracking() {
+        let mut tracker = FlowTracker::new();
+        let flow = FlowId::MACsec { sci: 0x9abc };
+
+        let now = SystemTime::now();
+        let mut pkt1 = create_packet(1, flow.clone());
+        pkt1.timestamp = now;
+        let mut pkt2 = create_packet(2, flow.clone());
+        pkt2.timestamp = now;
+
+        tracker.process_packet(pkt1);
+        tracker.process_packet(pkt2);
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].first_timestamp, Some(now));
+        assert_eq!(stats[0].last_timestamp, Some(now));
+    }
+
+    #[test]
+    fn test_inter_arrival_time_tracking() {
+        let mut tracker = FlowTracker::new();
+        let flow = FlowId::MACsec { sci: 0xdef0 };
+
+        let base_time = SystemTime::UNIX_EPOCH;
+
+        // Create packets with 1ms apart (1000 microseconds)
+        let mut pkt1 = create_packet(1, flow.clone());
+        pkt1.timestamp = base_time + std::time::Duration::from_micros(0);
+
+        let mut pkt2 = create_packet(2, flow.clone());
+        pkt2.timestamp = base_time + std::time::Duration::from_micros(1000);
+
+        let mut pkt3 = create_packet(3, flow.clone());
+        pkt3.timestamp = base_time + std::time::Duration::from_micros(3000); // 2ms from pkt2
+
+        tracker.process_packet(pkt1);
+        tracker.process_packet(pkt2);
+        tracker.process_packet(pkt3);
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 1);
+
+        // Should have min=1000us, max=2000us, avg=1500us
+        assert_eq!(stats[0].min_inter_arrival, Some(Duration::from_micros(1000)));
+        assert_eq!(stats[0].max_inter_arrival, Some(Duration::from_micros(2000)));
+        assert_eq!(stats[0].avg_inter_arrival, Some(Duration::from_micros(1500)));
+    }
+
+    #[test]
+    fn test_single_packet_no_inter_arrival() {
+        let mut tracker = FlowTracker::new();
+        let flow = FlowId::MACsec { sci: 0x1234 };
+
+        tracker.process_packet(create_packet(1, flow.clone()));
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].packets_received, 1);
+        // No inter-arrival times should be recorded for first packet
+        assert_eq!(stats[0].min_inter_arrival, None);
+        assert_eq!(stats[0].max_inter_arrival, None);
+        assert_eq!(stats[0].avg_inter_arrival, None);
+    }
+
+    #[test]
+    fn test_protocol_distribution_tracking() {
+        let mut tracker = FlowTracker::new();
+
+        // Create GenericL3 flows with different protocols
+        let tcp_flow = FlowId::GenericL3 {
+            src_ip: "192.168.1.1".parse().unwrap(),
+            dst_ip: "192.168.1.2".parse().unwrap(),
+            src_port: 5000,
+            dst_port: 80,
+            protocol: 6, // TCP
+        };
+
+        let mut pkt1 = create_packet(1, tcp_flow.clone());
+        let mut pkt2 = create_packet(2, tcp_flow.clone());
+        let mut pkt3 = create_packet(3, tcp_flow.clone());
+
+        tracker.process_packet(pkt1);
+        tracker.process_packet(pkt2);
+        tracker.process_packet(pkt3);
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].packets_received, 3);
+
+        // Protocol distribution should contain TCP (6) -> 3 packets
+        let tcp_count = stats[0].protocol_distribution.get(&6);
+        assert_eq!(tcp_count, Some(&3));
+    }
+
+    #[test]
+    fn test_multiple_flows_independent_statistics() {
+        let mut tracker = FlowTracker::new();
+        let flow1 = FlowId::MACsec { sci: 0x1111 };
+        let flow2 = FlowId::MACsec { sci: 0x2222 };
+
+        let base_time = SystemTime::UNIX_EPOCH;
+
+        // Flow 1: 3 packets, 100 bytes each
+        for i in 1..=3 {
+            let mut pkt = create_packet(i, flow1.clone());
+            pkt.payload_length = 100;
+            pkt.timestamp = base_time + Duration::from_millis(i as u64);
+            tracker.process_packet(pkt);
+        }
+
+        // Flow 2: 2 packets, 200 bytes each
+        for i in 1..=2 {
+            let mut pkt = create_packet(i, flow2.clone());
+            pkt.payload_length = 200;
+            pkt.timestamp = base_time + Duration::from_millis(i as u64 * 10);
+            tracker.process_packet(pkt);
+        }
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 2);
+
+        // Verify statistics are independent
+        for stat in stats {
+            if stat.flow_id == flow1 {
+                assert_eq!(stat.packets_received, 3);
+                assert_eq!(stat.total_bytes, 300);
+            } else if stat.flow_id == flow2 {
+                assert_eq!(stat.packets_received, 2);
+                assert_eq!(stat.total_bytes, 400);
+            }
+        }
+    }
+
+    #[test]
+    fn test_combined_statistics_with_gaps() {
+        let mut tracker = FlowTracker::new();
+        let flow = FlowId::MACsec { sci: 0xabcd };
+
+        let base_time = SystemTime::UNIX_EPOCH;
+
+        // Packet 1
+        let mut pkt1 = create_packet(1, flow.clone());
+        pkt1.payload_length = 150;
+        pkt1.timestamp = base_time;
+        tracker.process_packet(pkt1);
+
+        // Packet 2 (after 2ms) - continue sequence
+        let mut pkt2 = create_packet(2, flow.clone());
+        pkt2.payload_length = 150;
+        pkt2.timestamp = base_time + Duration::from_millis(2);
+        tracker.process_packet(pkt2);
+
+        // Packet 4 (after 4ms) - gap detected
+        let mut pkt3 = create_packet(4, flow.clone());
+        pkt3.payload_length = 150;
+        pkt3.timestamp = base_time + Duration::from_millis(4);
+        tracker.process_packet(pkt3);
+
+        // Packet 5
+        let mut pkt4 = create_packet(5, flow.clone());
+        pkt4.payload_length = 150;
+        pkt4.timestamp = base_time + Duration::from_millis(5);
+        tracker.process_packet(pkt4);
+
+        let stats = tracker.get_stats();
+        assert_eq!(stats.len(), 1);
+
+        // Basic stats
+        assert_eq!(stats[0].packets_received, 4);
+        assert_eq!(stats[0].total_bytes, 600); // 4 * 150
+        assert_eq!(stats[0].gaps_detected, 1);
+
+        // Inter-arrival times: 2ms, 2ms, 1ms -> min=1000us, max=2000us, avg=1666us
+        assert_eq!(stats[0].min_inter_arrival, Some(Duration::from_millis(1)));
+        assert_eq!(stats[0].max_inter_arrival, Some(Duration::from_millis(2)));
     }
 }

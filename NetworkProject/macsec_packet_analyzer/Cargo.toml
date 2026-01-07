@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 byteorder = "1.5"
 thiserror = "1.0"
+etherparse = "0.15"
 pcap = { version = "0.8", optional = true }
 tokio = { version = "1.35", features = ["full"], optional = true }
 dashmap = { version = "5.5", optional = true }

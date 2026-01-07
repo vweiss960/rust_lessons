@@ -1,5 +1,8 @@
 use std::fmt;
 use std::time::SystemTime;
+use std::net::IpAddr;
+use std::collections::HashMap;
+use std::time::Duration;
 
 #[cfg(feature = "rest-api")]
 use serde::{Deserialize, Serialize};
@@ -35,8 +38,24 @@ pub struct AnalyzedPacket {
 pub enum FlowId {
     /// MACsec flow identified by Secure Channel Identifier (8 bytes)
     MACsec { sci: u64 },
-    /// IPsec flow identified by SPI and destination IP (future)
-    IPsec { spi: u32, dst_ip: [u8; 4] },
+
+    /// IPsec ESP flow identified by SPI and destination IP
+    /// SPI (Security Parameter Index) is the primary flow identifier
+    /// dst_ip disambiguates when same SPI is used for multiple tunnels
+    IPsec {
+        spi: u32,
+        dst_ip: IpAddr,
+    },
+
+    /// Generic L3 flow identified by 5-tuple
+    /// Used for plain TCP/UDP traffic (non-encrypted)
+    GenericL3 {
+        src_ip: IpAddr,
+        dst_ip: IpAddr,
+        src_port: u16,
+        dst_port: u16,
+        protocol: u8,  // 6=TCP, 17=UDP
+    },
 }
 
 impl FlowId {
@@ -53,10 +72,20 @@ impl FlowId {
             FlowId::MACsec { sci: 0 }
         } else if s.starts_with("IPsec") {
             // Parse "IPsec { spi: 0x..., dst: ... }"
-            let spi = u32::from_str_radix("00000000", 16).unwrap_or(0);
+            // Simple parsing for now, can enhance later
             FlowId::IPsec {
-                spi,
-                dst_ip: [0, 0, 0, 0],
+                spi: 0,
+                dst_ip: IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+            }
+        } else if s.starts_with("TCP") || s.starts_with("UDP") {
+            // Parse "TCP { ip:port -> ip:port }"
+            // Simple fallback
+            FlowId::GenericL3 {
+                src_ip: IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+                dst_ip: IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+                src_port: 0,
+                dst_port: 0,
+                protocol: 6,
             }
         } else {
             FlowId::MACsec { sci: 0 }
@@ -67,12 +96,28 @@ impl FlowId {
 impl fmt::Display for FlowId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlowId::MACsec { sci } => write!(f, "MACsec {{ sci: 0x{:016x} }}", sci),
+            FlowId::MACsec { sci } => {
+                write!(f, "MACsec {{ sci: 0x{:016x} }}", sci)
+            }
             FlowId::IPsec { spi, dst_ip } => {
+                write!(f, "IPsec {{ spi: 0x{:08x}, dst: {} }}", spi, dst_ip)
+            }
+            FlowId::GenericL3 {
+                src_ip,
+                dst_ip,
+                src_port,
+                dst_port,
+                protocol,
+            } => {
+                let proto_name = match *protocol {
+                    6 => "TCP",
+                    17 => "UDP",
+                    _ => "Unknown",
+                };
                 write!(
                     f,
-                    "IPsec {{ spi: 0x{:08x}, dst: {}.{}.{}.{} }}",
-                    spi, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]
+                    "{} {{ {}:{} -> {}:{} }}",
+                    proto_name, src_ip, src_port, dst_ip, dst_port
                 )
             }
         }
@@ -98,6 +143,8 @@ pub struct SequenceGap {
 #[cfg_attr(feature = "rest-api", serde(crate = "serde"))]
 pub struct FlowStats {
     pub flow_id: FlowId,
+
+    // Existing gap detection stats
     pub packets_received: u64,
     pub gaps_detected: u64,
     pub total_lost_packets: u64,
@@ -105,6 +152,22 @@ pub struct FlowStats {
     pub last_sequence: Option<u32>,
     pub min_gap: Option<u32>,
     pub max_gap: Option<u32>,
+
+    // Enhanced statistics
+    pub total_bytes: u64,
+    #[cfg_attr(feature = "rest-api", serde(serialize_with = "serialize_systemtime_option"))]
+    pub first_timestamp: Option<SystemTime>,
+    #[cfg_attr(feature = "rest-api", serde(serialize_with = "serialize_systemtime_option"))]
+    pub last_timestamp: Option<SystemTime>,
+    pub min_inter_arrival: Option<Duration>,
+    pub max_inter_arrival: Option<Duration>,
+    pub avg_inter_arrival: Option<Duration>,
+
+    // Protocol distribution (IP protocol number -> packet count)
+    // For MACsec/IPsec: encrypted payload, so empty
+    // For GenericL3: already in FlowId, so this is for inner protocols if needed
+    #[cfg_attr(feature = "rest-api", serde(skip))]  // Skip HashMap in JSON
+    pub protocol_distribution: HashMap<u8, u64>,
 }
 
 /// Serialize SystemTime to ISO 8601 string for REST API
@@ -116,6 +179,22 @@ where
     use chrono::{DateTime, Utc};
     let dt: DateTime<Utc> = (*time).into();
     serializer.serialize_str(&dt.to_rfc3339())
+}
+
+/// Serialize Option<SystemTime> to ISO 8601 string for REST API
+#[cfg(feature = "rest-api")]
+fn serialize_systemtime_option<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match time {
+        Some(t) => {
+            use chrono::{DateTime, Utc};
+            let dt: DateTime<Utc> = (*t).into();
+            serializer.serialize_str(&dt.to_rfc3339())
+        }
+        None => serializer.serialize_none(),
+    }
 }
 
 /// Statistics from packet capture source
