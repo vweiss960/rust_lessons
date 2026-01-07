@@ -31,6 +31,8 @@ impl PersistenceManager {
         let stats = tracker.get_stats();
         for flow_stat in stats {
             db.insert_flow(&flow_stat)?;
+            // Also persist enhanced statistics
+            db.insert_statistics(&flow_stat)?;
         }
 
         // Get all gaps and persist them
@@ -50,6 +52,7 @@ impl PersistenceManager {
                 CaptureError::DatabaseError("Failed to lock database".to_string())
             })?;
             db.insert_flow(flow_stat)?;
+            db.insert_statistics(flow_stat)?;
         }
         Ok(())
     }

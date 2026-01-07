@@ -117,6 +117,26 @@ impl Database {
             )
             .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
 
+        // Create flow_statistics table for enhanced metrics
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS flow_statistics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    flow_id TEXT NOT NULL UNIQUE,
+                    total_bytes INTEGER NOT NULL DEFAULT 0,
+                    first_timestamp TEXT,
+                    last_timestamp TEXT,
+                    min_inter_arrival_us INTEGER,
+                    max_inter_arrival_us INTEGER,
+                    avg_inter_arrival_us INTEGER,
+                    protocol_distribution TEXT,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(flow_id) REFERENCES flows(id) ON DELETE CASCADE
+                )",
+                [],
+            )
+            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+
         // Create indices for common queries
         self.conn
             .execute(
@@ -135,6 +155,13 @@ impl Database {
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_gaps_detected_at ON sequence_gaps(detected_at)",
+                [],
+            )
+            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_stats_flow_id ON flow_statistics(flow_id)",
                 [],
             )
             .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
@@ -186,20 +213,127 @@ impl Database {
         Ok(())
     }
 
+    /// Store enhanced statistics for a flow
+    pub fn insert_statistics(&mut self, stats: &FlowStats) -> Result<(), CaptureError> {
+        use std::collections::HashMap;
+
+        let flow_id = stats.flow_id.to_string();
+
+        // Format timestamps as ISO 8601
+        let first_timestamp = stats.first_timestamp.map(|t| {
+            DateTime::<Utc>::from(t).to_rfc3339()
+        });
+        let last_timestamp = stats.last_timestamp.map(|t| {
+            DateTime::<Utc>::from(t).to_rfc3339()
+        });
+
+        // Convert Duration to microseconds
+        let min_inter_arrival_us = stats.min_inter_arrival.map(|d| d.as_micros() as i64);
+        let max_inter_arrival_us = stats.max_inter_arrival.map(|d| d.as_micros() as i64);
+        let avg_inter_arrival_us = stats.avg_inter_arrival.map(|d| d.as_micros() as i64);
+
+        // Serialize protocol distribution as JSON
+        let protocol_distribution = if stats.protocol_distribution.is_empty() {
+            None
+        } else {
+            match serde_json::to_string(&stats.protocol_distribution) {
+                Ok(json_str) => Some(json_str),
+                Err(_) => None,
+            }
+        };
+
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO flow_statistics (
+                    flow_id, total_bytes, first_timestamp, last_timestamp,
+                    min_inter_arrival_us, max_inter_arrival_us, avg_inter_arrival_us,
+                    protocol_distribution, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)",
+                rusqlite::params![
+                    &flow_id,
+                    stats.total_bytes as i64,
+                    first_timestamp,
+                    last_timestamp,
+                    min_inter_arrival_us,
+                    max_inter_arrival_us,
+                    avg_inter_arrival_us,
+                    protocol_distribution,
+                ],
+            )
+            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Get enhanced statistics for a specific flow
+    pub fn get_statistics(&self, flow_id: &FlowId) -> Result<Option<FlowStatisticsRecord>, CaptureError> {
+        let flow_id_str = flow_id.to_string();
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT flow_id, total_bytes, first_timestamp, last_timestamp,
+                        min_inter_arrival_us, max_inter_arrival_us, avg_inter_arrival_us,
+                        protocol_distribution
+                 FROM flow_statistics WHERE flow_id = ?1",
+            )
+            .map_err(|e: rusqlite::Error| CaptureError::DatabaseError(e.to_string()))?;
+
+        let result = stmt
+            .query_row(rusqlite::params![&flow_id_str], |row| {
+                Ok(FlowStatisticsRecord {
+                    flow_id: row.get(0)?,
+                    total_bytes: row.get(1)?,
+                    first_timestamp: row.get(2)?,
+                    last_timestamp: row.get(3)?,
+                    min_inter_arrival_us: row.get(4)?,
+                    max_inter_arrival_us: row.get(5)?,
+                    avg_inter_arrival_us: row.get(6)?,
+                    protocol_distribution: row.get(7)?,
+                })
+            })
+            .optional()
+            .map_err(|e: rusqlite::Error| CaptureError::DatabaseError(e.to_string()))?;
+
+        Ok(result)
+    }
+
     /// Get flow statistics by ID
     pub fn get_flow(&self, flow_id: &FlowId) -> Result<Option<FlowStats>, CaptureError> {
         let flow_id_str = flow_id.to_string();
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, first_sequence, last_sequence, packets_received,
-                        gaps_detected, total_lost_packets, min_gap, max_gap
-                 FROM flows WHERE id = ?1",
+                "SELECT f.id, f.first_sequence, f.last_sequence, f.packets_received,
+                        f.gaps_detected, f.total_lost_packets, f.min_gap, f.max_gap,
+                        s.total_bytes, s.first_timestamp, s.last_timestamp,
+                        s.min_inter_arrival_us, s.max_inter_arrival_us, s.avg_inter_arrival_us,
+                        s.protocol_distribution
+                 FROM flows f
+                 LEFT JOIN flow_statistics s ON f.id = s.flow_id
+                 WHERE f.id = ?1",
             )
             .map_err(|e: rusqlite::Error| CaptureError::DatabaseError(e.to_string()))?;
 
         let result = stmt
             .query_row(rusqlite::params![&flow_id_str], |row| {
+                let total_bytes = row.get::<_, Option<i64>>(8)?.unwrap_or(0) as u64;
+                let first_timestamp = row.get::<_, Option<String>>(9)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| SystemTime::from(dt.with_timezone(&Utc)));
+                let last_timestamp = row.get::<_, Option<String>>(10)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| SystemTime::from(dt.with_timezone(&Utc)));
+                let min_inter_arrival = row.get::<_, Option<i64>>(11)?
+                    .map(std::time::Duration::from_micros);
+                let max_inter_arrival = row.get::<_, Option<i64>>(12)?
+                    .map(std::time::Duration::from_micros);
+                let avg_inter_arrival = row.get::<_, Option<i64>>(13)?
+                    .map(std::time::Duration::from_micros);
+                let protocol_distribution_str = row.get::<_, Option<String>>(14)?;
+                let protocol_distribution = protocol_distribution_str
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+
                 Ok(FlowStats {
                     flow_id: FlowId::new(row.get::<_, String>(0)?),
                     first_sequence: row.get(1)?,
@@ -209,6 +343,13 @@ impl Database {
                     total_lost_packets: row.get(5)?,
                     min_gap: row.get(6)?,
                     max_gap: row.get(7)?,
+                    total_bytes,
+                    first_timestamp,
+                    last_timestamp,
+                    min_inter_arrival,
+                    max_inter_arrival,
+                    avg_inter_arrival,
+                    protocol_distribution,
                 })
             })
             .optional()
@@ -229,16 +370,38 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, first_sequence, last_sequence, packets_received,
-                        gaps_detected, total_lost_packets, min_gap, max_gap
-                 FROM flows
-                 ORDER BY updated_at DESC
+                "SELECT f.id, f.first_sequence, f.last_sequence, f.packets_received,
+                        f.gaps_detected, f.total_lost_packets, f.min_gap, f.max_gap,
+                        s.total_bytes, s.first_timestamp, s.last_timestamp,
+                        s.min_inter_arrival_us, s.max_inter_arrival_us, s.avg_inter_arrival_us,
+                        s.protocol_distribution
+                 FROM flows f
+                 LEFT JOIN flow_statistics s ON f.id = s.flow_id
+                 ORDER BY f.updated_at DESC
                  LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e: rusqlite::Error| CaptureError::DatabaseError(e.to_string()))?;
 
         let flows = stmt
             .query_map(rusqlite::params![limit, offset], |row| {
+                let total_bytes = row.get::<_, Option<i64>>(8)?.unwrap_or(0) as u64;
+                let first_timestamp = row.get::<_, Option<String>>(9)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| SystemTime::from(dt.with_timezone(&Utc)));
+                let last_timestamp = row.get::<_, Option<String>>(10)?
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| SystemTime::from(dt.with_timezone(&Utc)));
+                let min_inter_arrival = row.get::<_, Option<i64>>(11)?
+                    .map(std::time::Duration::from_micros);
+                let max_inter_arrival = row.get::<_, Option<i64>>(12)?
+                    .map(std::time::Duration::from_micros);
+                let avg_inter_arrival = row.get::<_, Option<i64>>(13)?
+                    .map(std::time::Duration::from_micros);
+                let protocol_distribution_str = row.get::<_, Option<String>>(14)?;
+                let protocol_distribution = protocol_distribution_str
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+
                 Ok(FlowStats {
                     flow_id: FlowId::new(row.get::<_, String>(0)?),
                     first_sequence: row.get(1)?,
@@ -248,6 +411,13 @@ impl Database {
                     total_lost_packets: row.get(5)?,
                     min_gap: row.get(6)?,
                     max_gap: row.get(7)?,
+                    total_bytes,
+                    first_timestamp,
+                    last_timestamp,
+                    min_inter_arrival,
+                    max_inter_arrival,
+                    avg_inter_arrival,
+                    protocol_distribution,
                 })
             })
             .map_err(|e: rusqlite::Error| CaptureError::DatabaseError(e.to_string()))?
@@ -303,17 +473,18 @@ impl Database {
         Ok(gaps)
     }
 
-    /// Get summary statistics across all flows
+    /// Get summary statistics across all flows including enhanced metrics
     pub fn get_summary_stats(&self) -> Result<SummaryStats, CaptureError> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT COUNT(*) as flow_count,
-                        COALESCE(SUM(packets_received), 0) as total_packets,
-                        COALESCE(SUM(gaps_detected), 0) as total_gaps,
-                        COALESCE(SUM(total_lost_packets), 0) as total_lost,
-                        COALESCE(MAX(max_gap), 0) as max_gap_size
-                 FROM flows",
+                "SELECT COUNT(DISTINCT f.id) as flow_count,
+                        COALESCE(SUM(f.packets_received), 0) as total_packets,
+                        COALESCE(SUM(f.gaps_detected), 0) as total_gaps,
+                        COALESCE(SUM(f.total_lost_packets), 0) as total_lost,
+                        COALESCE(MAX(f.max_gap), 0) as max_gap_size
+                 FROM flows f
+                 LEFT JOIN flow_statistics s ON f.id = s.flow_id",
             )
             .map_err(|e: rusqlite::Error| CaptureError::DatabaseError(e.to_string()))?;
 
@@ -333,6 +504,9 @@ impl Database {
     #[allow(dead_code)]
     pub fn clear_all(&mut self) -> Result<(), CaptureError> {
         self.conn
+            .execute("DELETE FROM flow_statistics", [])
+            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+        self.conn
             .execute("DELETE FROM sequence_gaps", [])
             .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
         self.conn
@@ -351,4 +525,18 @@ pub struct SummaryStats {
     pub total_gaps_detected: i64,
     pub total_lost_packets: i64,
     pub max_gap_size: i64,
+}
+
+/// Enhanced statistics for a single flow
+/// Stored in normalized flow_statistics table
+#[derive(Debug, Clone)]
+pub struct FlowStatisticsRecord {
+    pub flow_id: String,
+    pub total_bytes: i64,
+    pub first_timestamp: Option<String>,
+    pub last_timestamp: Option<String>,
+    pub min_inter_arrival_us: Option<i64>,
+    pub max_inter_arrival_us: Option<i64>,
+    pub avg_inter_arrival_us: Option<i64>,
+    pub protocol_distribution: Option<String>, // JSON string
 }
