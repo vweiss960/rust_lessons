@@ -229,7 +229,8 @@ echo -e "${GREEN}► Starting live_analyzer...${NC}"
 LIVE_CMD="$LIVE_ANALYZER_BIN"
 if [ -n "$REPLAY_MODE" ]; then
     # Replay mode: use INTERFACE as PCAP file path
-    LIVE_CMD="$LIVE_CMD --replay $INTERFACE $DATABASE --mode $REPLAY_MODE"
+    # Format: <pcap_file> <db_path> --replay [options]
+    LIVE_CMD="$LIVE_CMD $INTERFACE $DATABASE --replay --mode $REPLAY_MODE"
     [ -n "$REPLAY_PPS" ] && LIVE_CMD="$LIVE_CMD --pps $REPLAY_PPS"
     [ -n "$REPLAY_SPEED" ] && LIVE_CMD="$LIVE_CMD --speed $REPLAY_SPEED"
     [ -n "$REPLAY_LOOP" ] && LIVE_CMD="$LIVE_CMD $REPLAY_LOOP"
