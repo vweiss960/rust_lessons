@@ -1,0 +1,13 @@
+# Generated test files
+*.pcap
+*.db
+*.db-shm
+*.db-wal
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Test results
+results.csv
