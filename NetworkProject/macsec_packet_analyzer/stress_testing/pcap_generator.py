@@ -221,12 +221,15 @@ def generate_synthetic_packets(
     gap_rate: float = 0.05,
     seed: int = None,
     verbose: bool = False,
-    protocol: str = 'macsec'
+    protocol: str = 'macsec',
+    macsec_ratio: float = 0.5,
+    ipsec_ratio: float = 0.3,
+    generic_ratio: float = 0.2
 ) -> List[bytes]:
     """
     Generate synthetic packets with:
     - Multiple flows (different source MACs for MACsec, IPs for IPsec)
-    - Protocol selection (MACsec or IPsec, not mixed)
+    - Mixed protocol support (MACsec, IPsec, generic L3)
     - Realistic packet sizes (64-1500 bytes)
     - Injected gaps (packet loss simulation)
 
@@ -236,7 +239,10 @@ def generate_synthetic_packets(
         gap_rate: Proportion of packets to skip (0.05 = 5% gaps)
         seed: Random seed for reproducibility
         verbose: Print progress
-        protocol: 'macsec' or 'ipsec' (default: 'macsec')
+        protocol: 'macsec', 'ipsec', 'generic', or 'mixed' (default: 'macsec')
+        macsec_ratio: Proportion of MACsec packets (0.0-1.0, used with 'mixed')
+        ipsec_ratio: Proportion of IPsec packets (0.0-1.0, used with 'mixed')
+        generic_ratio: Proportion of generic IPv4 packets (0.0-1.0, used with 'mixed')
 
     Returns:
         List of packet data (bytes)
@@ -248,12 +254,30 @@ def generate_synthetic_packets(
     packets = []
     flow_states = {}
 
+    # Determine protocol distribution
+    if protocol == 'mixed':
+        # Normalize ratios to sum to 1.0
+        total = macsec_ratio + ipsec_ratio + generic_ratio
+        if total == 0:
+            macsec_ratio = 0.5
+            ipsec_ratio = 0.3
+            generic_ratio = 0.2
+            total = 1.0
+        macsec_ratio /= total
+        ipsec_ratio /= total
+        generic_ratio /= total
+        protocols = ['macsec', 'ipsec', 'generic']
+        protocols_weights = [macsec_ratio, ipsec_ratio, generic_ratio]
+    else:
+        protocols = [protocol]
+        protocols_weights = [1.0]
+
     # Initialize flows
     for flow_id in range(num_flows):
         flow_states[flow_id] = {
             'seq_num': random.randint(1, 1000000),
             'spi': random.randint(256, 65536),
-            'protocol': protocol,  # Use selected protocol for all flows
+            'protocol': random.choices(protocols, weights=protocols_weights)[0],
             'src_ip': f'192.168.{(flow_id >> 8) & 0xFF}.{flow_id & 0xFF}',
             'dst_ip': f'10.0.{(flow_id >> 8) & 0xFF}.{flow_id & 0xFF}',
         }
@@ -276,7 +300,9 @@ def generate_synthetic_packets(
         payload_size = random.choice(packet_sizes)
 
         # Choose protocol
-        if flow['protocol'] == 'macsec':
+        proto_type = flow['protocol']
+
+        if proto_type == 'macsec':
             # Build MACsec packet
             macsec = MACsecPacket(
                 packet_number=flow['seq_num'],
@@ -285,18 +311,6 @@ def generate_synthetic_packets(
             payload = macsec.pack()
             ethertype = 0x88E5  # MACsec
 
-        else:  # IPsec
-            # Build IPsec ESP packet
-            esp = IPsecPacket(
-                spi=flow['spi'],
-                seq_num=flow['seq_num'],
-                payload=b'\x00' * (payload_size - 8)  # 8 bytes for SPI+seq header
-            )
-            payload = esp.pack()
-            ethertype = 0x0800  # IPv4
-
-        # Build full Ethernet + optional IPv4 frame
-        if flow['protocol'] == 'macsec':
             # Ethernet + MACsec
             eth = EthernetFrame(
                 dst_mac='00:11:22:33:44:55',
@@ -304,8 +318,17 @@ def generate_synthetic_packets(
                 ethertype=ethertype,
                 payload=payload
             )
-        else:
-            # Ethernet + IPv4 + IPsec
+
+        elif proto_type == 'ipsec':
+            # Build IPsec ESP packet
+            esp = IPsecPacket(
+                spi=flow['spi'],
+                seq_num=flow['seq_num'],
+                payload=b'\x00' * (payload_size - 8)  # 8 bytes for SPI+seq header
+            )
+            payload = esp.pack()
+
+            # Ethernet + IPv4 + IPsec (ESP protocol 50)
             ipv4 = IPv4Packet(
                 src_ip=flow['src_ip'],
                 dst_ip=flow['dst_ip'],
@@ -315,7 +338,25 @@ def generate_synthetic_packets(
             eth = EthernetFrame(
                 dst_mac='00:11:22:33:44:55',
                 src_mac='66:77:88:99:aa:bb',
-                ethertype=ethertype,
+                ethertype=0x0800,  # IPv4
+                payload=ipv4.pack()
+            )
+
+        else:  # generic
+            # Build generic IPv4 packet (UDP-like payload, not IPsec)
+            payload = b'\x00' * (payload_size - 8)  # Generic payload
+
+            # Ethernet + IPv4 (protocol 17 = UDP)
+            ipv4 = IPv4Packet(
+                src_ip=flow['src_ip'],
+                dst_ip=flow['dst_ip'],
+                protocol=17,  # UDP
+                payload=payload
+            )
+            eth = EthernetFrame(
+                dst_mac='00:11:22:33:44:55',
+                src_mac='66:77:88:99:aa:bb',
+                ethertype=0x0800,  # IPv4
                 payload=ipv4.pack()
             )
 
@@ -373,9 +414,27 @@ def main():
     )
     parser.add_argument(
         '--protocol',
-        choices=['macsec', 'ipsec'],
+        choices=['macsec', 'ipsec', 'generic', 'mixed'],
         default='macsec',
-        help='Protocol to use for all packets (default: macsec)'
+        help='Protocol to use: macsec, ipsec, generic (IPv4/UDP), or mixed (default: macsec)'
+    )
+    parser.add_argument(
+        '--macsec-ratio',
+        type=float,
+        default=0.5,
+        help='Proportion of MACsec packets in mixed mode (0.0-1.0, default: 0.5)'
+    )
+    parser.add_argument(
+        '--ipsec-ratio',
+        type=float,
+        default=0.3,
+        help='Proportion of IPsec packets in mixed mode (0.0-1.0, default: 0.3)'
+    )
+    parser.add_argument(
+        '--generic-ratio',
+        type=float,
+        default=0.2,
+        help='Proportion of generic IPv4 packets in mixed mode (0.0-1.0, default: 0.2)'
     )
 
     args = parser.parse_args()
@@ -387,6 +446,8 @@ def main():
         print(f"  Packets: {args.packets}")
         print(f"  Flows: {num_flows}")
         print(f"  Protocol: {args.protocol}")
+        if args.protocol == 'mixed':
+            print(f"  Protocol mix: MACsec {args.macsec_ratio*100:.0f}%, IPsec {args.ipsec_ratio*100:.0f}%, Generic {args.generic_ratio*100:.0f}%")
         print(f"  Gap rate: {args.gap_rate * 100:.1f}%")
         print(f"  Seed: {args.seed}")
         print(f"  Output: {args.output}")
@@ -399,7 +460,10 @@ def main():
         gap_rate=args.gap_rate,
         seed=args.seed,
         verbose=args.verbose,
-        protocol=args.protocol
+        protocol=args.protocol,
+        macsec_ratio=args.macsec_ratio,
+        ipsec_ratio=args.ipsec_ratio,
+        generic_ratio=args.generic_ratio
     )
 
     # Write to PCAP file
