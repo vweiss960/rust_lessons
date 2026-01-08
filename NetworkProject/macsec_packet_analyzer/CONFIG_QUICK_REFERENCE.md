@@ -71,8 +71,8 @@ cargo run --features rest-api --bin rest_api_server -- \
 ## Workflow: Capture & Query
 
 ```bash
-# Terminal 1: Capture to live.db
-sudo cargo run --bin live_analyzer -- eth0 generic live.db pcap
+# Terminal 1: Capture to live.db (auto-detects protocol)
+sudo cargo run --bin live_analyzer -- eth0 live.db pcap
 
 # Terminal 2: Query with REST API pointing to live.db
 cargo run --bin rest_api_server -- --db live.db

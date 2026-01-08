@@ -239,8 +239,8 @@ Use `--config` to specify a different path:
 ### Capture and Analyze
 
 ```bash
-# Terminal 1: Capture traffic to live.db
-sudo cargo run --bin live_analyzer -- eth0 generic live.db pcap
+# Terminal 1: Capture traffic to live.db (auto-detects protocol)
+sudo cargo run --bin live_analyzer -- eth0 live.db pcap
 
 # Terminal 2: Start API server pointing to capture
 cargo run --bin rest_api_server -- --db live.db
@@ -252,11 +252,11 @@ curl http://localhost:3000/api/v1/stats/summary | jq .
 ### Multiple Captures
 
 ```bash
-# Capture 1
-sudo cargo run --bin live_analyzer -- eth0 macsec capture1.db pcap
+# Capture 1 (auto-detects protocol on eth0)
+sudo cargo run --bin live_analyzer -- eth0 capture1.db pcap
 
-# Capture 2
-sudo cargo run --bin live_analyzer -- eth1 generic capture2.db pcap
+# Capture 2 (auto-detects protocol on eth1)
+sudo cargo run --bin live_analyzer -- eth1 capture2.db pcap
 
 # Query Capture 1
 cargo run --bin rest_api_server -- --db capture1.db --port 3000 &

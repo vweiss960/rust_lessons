@@ -12,7 +12,8 @@ sudo apt-get install libpcap-dev
 cargo build --bin live_analyzer --release
 
 # 3. Start capturing (requires sudo)
-sudo cargo run --bin live_analyzer --release -- eth0 generic live.db pcap
+# The analyzer automatically detects the protocol from packet headers
+sudo cargo run --bin live_analyzer --release -- eth0 live.db pcap
 
 # 4. Generate traffic in another terminal
 ping example.com &
@@ -20,33 +21,34 @@ ping example.com &
 # 5. Press Ctrl+C to stop and see results
 
 # 6. Query results with API
-cargo run --bin api_server &
-curl http://localhost:8080/api/v1/stats/summary | jq .
+cargo run --bin rest_api_server -- --db live.db &
+curl http://localhost:3000/api/v1/stats/summary | jq .
 ```
+
+## Automatic Protocol Detection
+
+The live analyzer automatically detects:
+- **MACsec** (EtherType 0x88E5)
+- **IPsec ESP** (IPv4 + IP protocol 50)
+- **Generic L3** (IPv4 TCP/UDP)
+
+No need to specify the protocol - just provide the interface name!
 
 ## Common Commands
 
-### Capture MACsec Traffic
+### Capture All Traffic (Auto-Detect)
 ```bash
-sudo cargo run --bin live_analyzer -- eth0 macsec out.db pcap
+sudo cargo run --bin live_analyzer -- eth0 live.db pcap
 ```
 
-### Capture IPsec Traffic
-```bash
-sudo cargo run --bin live_analyzer -- eth0 ipsec out.db pcap
-```
-
-### Capture TCP/UDP Traffic (Gap detection disabled)
-```bash
-sudo cargo run --bin live_analyzer -- eth0 generic out.db pcap
-```
-
-**Note**: Gap detection is disabled for TCP/UDP traffic. This command tracks flow statistics (packet count, bytes, bandwidth, timing metrics) but does not report gaps. Gap detection is unreliable for TCP/UDP because TCP sequence numbers track cumulative bytes, not packets, and permit retransmissions and out-of-order delivery.
+The analyzer automatically identifies the protocol and detects gaps for MACsec/IPsec flows.
 
 ### Monitor Loopback (no sudo, test only)
 ```bash
-cargo run --bin live_analyzer -- lo generic test.db pcap
+cargo run --bin live_analyzer -- lo test.db pcap
 ```
+
+**Note**: Gap detection is disabled for Generic L3 (TCP/UDP) traffic. This is intentional because TCP sequence numbers track cumulative bytes, not packets, and permit retransmissions and out-of-order delivery. The analyzer tracks flow statistics (packet count, bytes, bandwidth, timing metrics) for all protocols.
 
 ## View Results
 
@@ -88,16 +90,12 @@ curl "http://localhost:8080/api/v1/flows?limit=10" | jq .
 ## Arguments Explained
 
 ```
-live_analyzer <interface> <protocol> <db_path> <capture_method>
+live_analyzer <interface> <db_path> <capture_method>
 ```
 
 - **interface**: Network interface name (eth0, wlan0, lo, etc.)
   - List with: `ip link show`
-
-- **protocol**: One of: `macsec`, `ipsec`, `generic`
-  - Use `generic` for most network traffic (TCP/UDP)
-  - Use `macsec` for MACsec secured traffic
-  - Use `ipsec` for IPsec encrypted traffic
+  - Protocol is auto-detected from packet headers
 
 - **db_path**: Where to save the SQLite database
   - Example: `./results.db` or `/tmp/capture.db`
@@ -111,11 +109,11 @@ Live capture requires elevated privileges:
 
 ```bash
 # Linux/macOS - use sudo
-sudo cargo run --bin live_analyzer -- eth0 generic out.db pcap
+sudo cargo run --bin live_analyzer -- eth0 out.db pcap
 
 # Windows - run as Administrator
 # Open PowerShell as Administrator, then:
-cargo run --bin live_analyzer -- eth0 generic out.db pcap
+cargo run --bin live_analyzer -- eth0 out.db pcap
 ```
 
 ## Find Your Interface

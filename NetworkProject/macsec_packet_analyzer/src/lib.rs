@@ -52,5 +52,5 @@ pub use capture::{AfPacketCapture, XdpCapture};
 pub use capture::{NapatechCapture, NapatechConfig, NapatechCaptureMode, NapatechStats};
 
 pub use error::{AnalysisError, CaptureError, ParseError};
-pub use protocol::{MACsecParser, SequenceParser};
+pub use protocol::{MACsecParser, SequenceParser, ProtocolRegistry, RegistryStats};
 pub use types::{AnalyzedPacket, AnalysisReport, FlowId, FlowStats, SequenceGap};

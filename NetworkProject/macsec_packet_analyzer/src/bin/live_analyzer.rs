@@ -1,17 +1,20 @@
-//! Async Live Packet Analyzer
+//! Async Live Packet Analyzer with Automatic Protocol Detection
 //!
-//! Captures packets from a live network interface, analyzes them for sequence gaps,
-//! and persists statistics to a database. Supports configurable capture method
-//! (PCAP or AF_PACKET on Linux) and protocol parsing (MACsec, IPsec, Generic L3).
+//! Captures packets from a live network interface, automatically detects protocol,
+//! analyzes them for sequence gaps, and persists statistics to a database.
+//!
+//! Automatic protocol detection supports:
+//! - MACsec (EtherType 0x88E5)
+//! - IPsec ESP (IPv4 + IP protocol 50)
+//! - Generic L3 (TCP/UDP)
 //!
 //! Usage:
-//!   cargo build --bin async_live_analyzer --release
-//!   ./target/release/async_live_analyzer <interface> <protocol> <db_path> <capture_method>
+//!   cargo build --bin live_analyzer --release
+//!   ./target/release/live_analyzer <interface> <db_path> <capture_method>
 //!
 //! Examples:
-//!   ./target/release/async_live_analyzer eth0 macsec live.db pcap
-//!   ./target/release/async_live_analyzer eth0 ipsec live.db af_packet
-//!   ./target/release/async_live_analyzer eth0 generic live.db pcap
+//!   ./target/release/live_analyzer eth0 live.db pcap
+//!   ./target/release/live_analyzer eth1 analysis.db pcap
 
 use macsec_packet_analyzer::{
     capture::{AsyncPacketSource, PcapLiveCapture},
@@ -19,8 +22,8 @@ use macsec_packet_analyzer::{
     db::{Database, DatabaseConfig},
     error::CaptureError,
     persist::PersistenceManager,
-    protocol::{MACsecParser, IPsecParser, GenericL3Parser, SequenceParser},
-    types::{AnalyzedPacket, FlowId},
+    protocol::ProtocolRegistry,
+    types::AnalyzedPacket,
 };
 
 use std::sync::{Arc, Mutex};
@@ -31,32 +34,27 @@ use tokio::signal;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() != 5 {
-        eprintln!("Usage: {} <interface> <protocol> <db_path> <capture_method>", args[0]);
+    if args.len() != 4 {
+        eprintln!("Usage: {} <interface> <db_path> <capture_method>", args[0]);
         eprintln!();
         eprintln!("Arguments:");
         eprintln!("  interface       - Network interface (e.g., eth0)");
-        eprintln!("  protocol        - Protocol parser: macsec, ipsec, or generic");
         eprintln!("  db_path         - SQLite database path for storing results");
-        eprintln!("  capture_method  - Capture method: pcap or af_packet (Linux only)");
+        eprintln!("  capture_method  - Capture method: pcap");
         eprintln!();
-        eprintln!("Examples:");
-        eprintln!("  {} eth0 macsec live.db pcap", args[0]);
-        eprintln!("  {} eth0 ipsec live.db af_packet", args[0]);
-        eprintln!("  {} eth0 generic live.db pcap", args[0]);
+        eprintln!("Example:");
+        eprintln!("  {} eth0 live.db pcap", args[0]);
+        eprintln!();
+        eprintln!("Automatic Protocol Detection:");
+        eprintln!("  - MACsec (EtherType 0x88E5)");
+        eprintln!("  - IPsec ESP (IPv4 + IP protocol 50)");
+        eprintln!("  - Generic L3 (TCP/UDP on IPv4)");
         std::process::exit(1);
     }
 
     let interface = &args[1];
-    let protocol = args[2].to_lowercase();
-    let db_path = &args[3];
-    let capture_method = args[4].to_lowercase();
-
-    // Validate protocol
-    if !["macsec", "ipsec", "generic"].contains(&protocol.as_str()) {
-        eprintln!("Error: Unknown protocol '{}'. Use: macsec, ipsec, or generic", protocol);
-        std::process::exit(1);
-    }
+    let db_path = &args[2];
+    let capture_method = args[3].to_lowercase();
 
     // Validate capture method
     if capture_method == "af_packet" {
@@ -70,9 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    println!("Starting async packet analyzer");
+    println!("Starting async packet analyzer with automatic protocol detection");
     println!("  Interface: {}", interface);
-    println!("  Protocol: {}", protocol);
+    println!("  Protocol: Auto-detect (MACsec, IPsec, Generic L3)");
     println!("  Database: {}", db_path);
     println!("  Capture: {}", capture_method);
     println!();
@@ -92,16 +90,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create flow tracker
     let flow_tracker = Arc::new(Mutex::new(FlowTracker::new()));
 
+    // Create protocol registry
+    let registry = Arc::new(ProtocolRegistry::new());
+
     // Run the analyzer with PCAP
-    analyze_with_pcap(&protocol, interface, &flow_tracker, &persistence).await?;
+    analyze_with_pcap(interface, &registry, &flow_tracker, &persistence).await?;
 
     Ok(())
 }
 
 /// Analyze packets using PCAP capture
 async fn analyze_with_pcap(
-    protocol: &str,
     interface: &str,
+    registry: &Arc<ProtocolRegistry>,
     flow_tracker: &Arc<Mutex<FlowTracker>>,
     persistence: &PersistenceManager,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -111,13 +112,13 @@ async fn analyze_with_pcap(
     println!("Press Ctrl+C to stop and save results");
     println!();
 
-    run_analyzer(protocol, &mut capture, flow_tracker, persistence).await
+    run_analyzer(&mut capture, registry, flow_tracker, persistence).await
 }
 
-/// Main packet processing loop with graceful shutdown - dispatches to protocol-specific version
+/// Main packet processing loop with graceful shutdown and automatic protocol detection
 async fn run_analyzer(
-    protocol: &str,
     capture: &mut PcapLiveCapture,
+    registry: &Arc<ProtocolRegistry>,
     flow_tracker: &Arc<Mutex<FlowTracker>>,
     persistence: &PersistenceManager,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -128,92 +129,18 @@ async fn run_analyzer(
     let mut gap_count = 0u64;
     let start_time = Instant::now();
     let mut last_persist = Instant::now();
-    let persist_interval = Duration::from_secs(5); // Persist every 5 seconds or 10k packets
+    let persist_interval = Duration::from_secs(5);
 
-    // Create parser upfront based on protocol
-    match protocol {
-        "macsec" => {
-            run_analyzer_with_parser(
-                &MACsecParser,
-                capture,
-                flow_tracker,
-                persistence,
-                &mut sigint,
-                &mut packet_count,
-                &mut gap_count,
-                start_time,
-                &mut last_persist,
-                persist_interval,
-            )
-            .await?;
-        }
-        "ipsec" => {
-            run_analyzer_with_parser(
-                &IPsecParser,
-                capture,
-                flow_tracker,
-                persistence,
-                &mut sigint,
-                &mut packet_count,
-                &mut gap_count,
-                start_time,
-                &mut last_persist,
-                persist_interval,
-            )
-            .await?;
-        }
-        "generic" => {
-            run_analyzer_with_parser(
-                &GenericL3Parser,
-                capture,
-                flow_tracker,
-                persistence,
-                &mut sigint,
-                &mut packet_count,
-                &mut gap_count,
-                start_time,
-                &mut last_persist,
-                persist_interval,
-            )
-            .await?;
-        }
-        _ => unreachable!(),
-    }
-
-    // Final persistence
-    println!("Saving final statistics...");
-    {
-        let tracker = flow_tracker.lock().map_err(|_| "Failed to lock flow tracker")?;
-        persistence.persist_flows(&tracker)?;
-        print_analysis_report(&tracker, packet_count, gap_count, start_time)?;
-    }
-
-    Ok(())
-}
-
-/// Generic packet processing loop for any parser type
-async fn run_analyzer_with_parser<P: SequenceParser>(
-    parser: &P,
-    capture: &mut PcapLiveCapture,
-    flow_tracker: &Arc<Mutex<FlowTracker>>,
-    persistence: &PersistenceManager,
-    sigint: &mut tokio::signal::unix::Signal,
-    packet_count: &mut u64,
-    gap_count: &mut u64,
-    start_time: Instant,
-    last_persist: &mut Instant,
-    persist_interval: Duration,
-) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             // Packet received
             packet_result = capture.next_packet() => {
                 match packet_result {
                     Ok(Some(raw_packet)) => {
-                        *packet_count += 1;
+                        packet_count += 1;
 
-                        // Try to parse the packet
-                        if let Some(seq_info) = parser.parse_sequence(&raw_packet.data)? {
+                        // Automatic protocol detection using registry
+                        if let Some(seq_info) = registry.detect_and_parse(&raw_packet.data)? {
                             // Create analyzed packet
                             let analyzed = AnalyzedPacket {
                                 sequence_number: seq_info.sequence_number,
@@ -225,25 +152,33 @@ async fn run_analyzer_with_parser<P: SequenceParser>(
                             // Track the packet and detect gaps
                             let mut tracker = flow_tracker.lock().map_err(|_| "Failed to lock flow tracker")?;
                             if tracker.process_packet(analyzed).is_some() {
-                                *gap_count += 1;
+                                gap_count += 1;
                             }
                         }
 
                         // Periodic persistence
-                        if last_persist.elapsed() > persist_interval || *packet_count % 10000 == 0 {
+                        if last_persist.elapsed() > persist_interval || packet_count % 10000 == 0 {
                             let tracker = flow_tracker.lock().map_err(|_| "Failed to lock flow tracker")?;
                             persistence.persist_flows(&tracker)?;
-                            *last_persist = Instant::now();
+                            last_persist = Instant::now();
 
                             let elapsed = start_time.elapsed().as_secs_f64();
-                            let pps = *packet_count as f64 / elapsed;
+                            let pps = packet_count as f64 / elapsed;
+                            let reg_stats = registry.get_stats();
+                            let cache_hit_rate = if reg_stats.cache_hits + reg_stats.cache_misses > 0 {
+                                (reg_stats.cache_hits as f64 / (reg_stats.cache_hits + reg_stats.cache_misses) as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+
                             println!(
-                                "[{:.1}s] Packets: {}, Gaps: {}, Flows: {}, Rate: {:.0} pps",
+                                "[{:.1}s] Packets: {}, Gaps: {}, Flows: {}, Rate: {:.0} pps, Cache: {:.1}%",
                                 elapsed,
-                                *packet_count,
-                                *gap_count,
+                                packet_count,
+                                gap_count,
                                 tracker.get_stats().len(),
-                                pps
+                                pps,
+                                cache_hit_rate
                             );
                         }
                     }
@@ -270,12 +205,21 @@ async fn run_analyzer_with_parser<P: SequenceParser>(
         }
     }
 
+    // Final persistence
+    println!("Saving final statistics...");
+    {
+        let tracker = flow_tracker.lock().map_err(|_| "Failed to lock flow tracker")?;
+        persistence.persist_flows(&tracker)?;
+        print_analysis_report(&tracker, registry, packet_count, gap_count, start_time)?;
+    }
+
     Ok(())
 }
 
 /// Print final analysis report with statistics
 fn print_analysis_report(
     tracker: &FlowTracker,
+    registry: &Arc<ProtocolRegistry>,
     packet_count: u64,
     gap_count: u64,
     start_time: Instant,
@@ -287,6 +231,8 @@ fn print_analysis_report(
         0.0
     };
 
+    let reg_stats = registry.get_stats();
+
     println!();
     println!("=== Analysis Complete ===");
     println!("Total packets analyzed: {}", packet_count);
@@ -295,16 +241,36 @@ fn print_analysis_report(
     println!("Packet rate: {:.0} pps", pps);
     println!();
 
+    println!("=== Protocol Detection Stats ===");
+    if reg_stats.cache_hits + reg_stats.cache_misses > 0 {
+        let cache_hit_rate =
+            (reg_stats.cache_hits as f64 / (reg_stats.cache_hits + reg_stats.cache_misses) as f64)
+                * 100.0;
+        println!("Cache hits: {} ({:.1}%)", reg_stats.cache_hits, cache_hit_rate);
+    } else {
+        println!("Cache hits: {}", reg_stats.cache_hits);
+    }
+    println!("Cache misses: {}", reg_stats.cache_misses);
+    println!("EtherType fast path: {}", reg_stats.ethertype_fast_path);
+    println!("Unknown protocol: {}", reg_stats.unknown_protocol);
+    println!("Cache size: {}", reg_stats.cache_size);
+    println!();
+
     let stats = tracker.get_stats();
     println!("Flows analyzed: {}", stats.len());
     println!();
 
     if !stats.is_empty() {
-        println!("{:<50} {:>15} {:>15} {:>15} {:>15}", "Flow ID", "Packets", "Bytes", "Gaps", "Bandwidth");
+        println!(
+            "{:<50} {:>15} {:>15} {:>15} {:>15}",
+            "Flow ID", "Packets", "Bytes", "Gaps", "Bandwidth"
+        );
         println!("{}", "-".repeat(110));
 
         for flow in stats {
-            let bandwidth_mbps = if let (Some(first), Some(last)) = (flow.first_timestamp, flow.last_timestamp) {
+            let bandwidth_mbps = if let (Some(first), Some(last)) =
+                (flow.first_timestamp, flow.last_timestamp)
+            {
                 if let Ok(duration) = last.duration_since(first) {
                     let dur_secs = duration.as_secs_f64();
                     if dur_secs > 0.0 {
@@ -331,7 +297,7 @@ fn print_analysis_report(
 
         println!();
         println!("Results saved to database. Query with:");
-        println!("  cargo run --features rest-api --bin api_server");
+        println!("  cargo run --bin rest_api_server -- --db {}", "live.db");
     }
 
     Ok(())
