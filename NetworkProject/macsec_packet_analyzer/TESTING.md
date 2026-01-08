@@ -691,7 +691,7 @@ The PCAP replay feature allows you to load a PCAP file and replay packets at con
 Replay a PCAP file at maximum throughput for CPU-intensive stress testing:
 
 ```bash
-./test_analyzer.sh --replay fast -d ./replay_fast.db --debug
+./test_analyzer.sh --replay fast ./macsec_traffic.pcap -d ./replay_fast.db --debug
 ```
 
 **Expected Output:**
@@ -705,7 +705,7 @@ Replay a PCAP file at maximum throughput for CPU-intensive stress testing:
 Replay packets respecting original inter-packet delays from the PCAP file:
 
 ```bash
-./test_analyzer.sh --replay original -d ./replay_original.db --debug
+./test_analyzer.sh --replay original ./macsec_traffic.pcap -d ./replay_original.db --debug
 ```
 
 **Use Case**: Realistic traffic pattern replay
@@ -720,7 +720,7 @@ Replay packets respecting original inter-packet delays from the PCAP file:
 Replay at a fixed, controllable packet rate:
 
 ```bash
-./test_analyzer.sh --replay fixed --replay-pps 1000 -d ./replay_fixed.db --debug
+./test_analyzer.sh --replay fixed ./macsec_traffic.pcap --replay-pps 1000 -d ./replay_fixed.db --debug
 ```
 
 **Use Case**: Bandwidth and load testing with specific rates
@@ -732,7 +732,7 @@ Replay at a fixed, controllable packet rate:
 
 **Example - Moderate Stress Test:**
 ```bash
-./test_analyzer.sh --replay fixed --replay-pps 50000 -d ./replay_50k.db --release
+./test_analyzer.sh --replay fixed ./macsec_traffic.pcap --replay-pps 50000 -d ./replay_50k.db --release
 ```
 
 Expected: ~50,000 packets/sec, sustained indefinitely
@@ -743,10 +743,10 @@ Accelerate or decelerate the original PCAP timing:
 
 ```bash
 # 10x faster than original
-./test_analyzer.sh --replay speed --replay-speed 10.0 -d ./replay_10x.db --debug
+./test_analyzer.sh --replay speed ./macsec_traffic.pcap --replay-speed 10.0 -d ./replay_10x.db --debug
 
 # Half speed (slower)
-./test_analyzer.sh --replay speed --replay-speed 0.5 -d ./replay_half.db --debug
+./test_analyzer.sh --replay speed ./macsec_traffic.pcap --replay-speed 0.5 -d ./replay_half.db --debug
 ```
 
 **Use Cases:**
@@ -760,10 +760,10 @@ Enable infinite looping to continuously replay a PCAP file:
 
 ```bash
 # Fast mode with looping for 1 hour
-timeout 3600 ./test_analyzer.sh --replay fast --replay-loop -d ./replay_stress.db --release
+timeout 3600 ./test_analyzer.sh --replay fast ./macsec_traffic.pcap --replay-loop -d ./replay_stress.db --release
 
 # Or let it run indefinitely (Ctrl+C to stop)
-./test_analyzer.sh --replay fast --replay-loop -d ./replay_sustained.db
+./test_analyzer.sh --replay fast ./macsec_traffic.pcap --replay-loop -d ./replay_sustained.db
 ```
 
 **Important**: Looping causes sequence/packet numbers to reset, which temporarily creates artificial gaps. These gaps are expected and indicate loop wraparound, not genuine packet loss.
@@ -777,7 +777,7 @@ sqlite3 ./replay_stress.db "SELECT COUNT(DISTINCT flow_id) FROM flows;"
 
 **Example 1: MACsec Stress Test (Fast Mode)**
 ```bash
-./test_analyzer.sh --replay fast -d ./macsec_stress.db --debug
+./test_analyzer.sh --replay fast ./macsec_traffic.pcap -d ./macsec_stress.db --debug
 ```
 
 **Expected Results:**
@@ -788,7 +788,7 @@ sqlite3 ./replay_stress.db "SELECT COUNT(DISTINCT flow_id) FROM flows;"
 **Example 2: Sustained Load Testing (Fixed Rate, Looping)**
 ```bash
 # 50 minute sustained test at 10K packets/sec
-timeout 3000 ./test_analyzer.sh --replay fixed --replay-pps 10000 --replay-loop \
+timeout 3000 ./test_analyzer.sh --replay fixed ./macsec_traffic.pcap --replay-pps 10000 --replay-loop \
   -d ./sustained_10k.db --release
 ```
 
@@ -804,14 +804,14 @@ sqlite3 ./sustained_10k.db \
 
 **Example 3: Realistic Traffic Replay**
 ```bash
-./test_analyzer.sh --replay original -d ./realistic.db --debug
+./test_analyzer.sh --replay original ./macsec_traffic.pcap -d ./realistic.db --debug
 ```
 
 **Behavior**: Respects original timing, good for testing with realistic inter-packet timing
 
 **Example 4: 10x Speed Acceleration**
 ```bash
-./test_analyzer.sh --replay speed --replay-speed 10.0 \
+./test_analyzer.sh --replay speed ./macsec_traffic.pcap --replay-speed 10.0 \
   -d ./accelerated.db --debug
 ```
 
@@ -855,13 +855,13 @@ Typical performance on commodity hardware (Intel i7, 16GB RAM):
 
 1. **Start with Debug Output**
    ```bash
-   ./test_analyzer.sh --replay fast -d ./debug_test.db --debug
+   ./test_analyzer.sh --replay fast ./macsec_traffic.pcap -d ./debug_test.db --debug
    ```
    Shows protocol detection, flow creation, and statistics
 
 2. **Use Release Mode for Performance Testing**
    ```bash
-   ./test_analyzer.sh --replay fast -d ./perf_test.db --release
+   ./test_analyzer.sh --replay fast ./macsec_traffic.pcap -d ./perf_test.db --release
    ```
    ~2-3x faster than debug builds
 
@@ -910,7 +910,7 @@ live_analyzer started (PID: 12345)
 
 **Solution**: Check debug output or use `--debug` flag:
 ```bash
-./test_analyzer.sh --replay fast -d ./debug.db --debug
+./test_analyzer.sh --replay fast ./macsec_traffic.pcap -d ./debug.db --debug
 ```
 
 ---

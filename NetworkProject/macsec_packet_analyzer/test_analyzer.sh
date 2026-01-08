@@ -100,9 +100,14 @@ while [[ $# -gt 0 ]]; do
             head -n 35 "$0" | tail -n +3
             exit 0
             ;;
-        *)
+        -*)
             echo -e "${RED}Unknown option: $1${NC}"
             exit 1
+            ;;
+        *)
+            # Positional argument - treat as interface/PCAP file
+            INTERFACE="$1"
+            shift
             ;;
     esac
 done
