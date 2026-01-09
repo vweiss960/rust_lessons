@@ -253,31 +253,19 @@ rm -f "$DB_FILE" "$DB_FILE-shm" "$DB_FILE-wal"
 echo "Command: $LIVE_ANALYZER_BIN $PCAP_FILE $DB_FILE --replay --mode fast"
 echo ""
 
-ANALYZE_START=$(date +%s%3N)
-
+# Run analyzer and measure its actual runtime (not including sleep loops)
+echo -n "Processing"
 if [ "$VERBOSE" = "true" ]; then
-    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast --debug 2>&1 | head -50 &
-    ANALYZER_PID=$!
+    ANALYZE_START=$(date +%s%3N)
+    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast --debug 2>&1 | head -50
+    ANALYZE_END=$(date +%s%3N)
 else
-    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast > /dev/null 2>&1 &
-    ANALYZER_PID=$!
+    ANALYZE_START=$(date +%s%3N)
+    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast > /dev/null 2>&1
+    ANALYZE_END=$(date +%s%3N)
 fi
-
-# Show progress dots with timeout
-echo -n "Processing."
-for i in $(seq 1 $DURATION); do
-    sleep 1
-    echo -n "."
-    if ! kill -0 $ANALYZER_PID 2>/dev/null; then
-        break
-    fi
-done
 echo ""
 
-# Wait for analyzer to finish
-wait $ANALYZER_PID 2>/dev/null || true
-
-ANALYZE_END=$(date +%s%3N)
 ELAPSED_MS=$((ANALYZE_END - ANALYZE_START))
 ELAPSED_SECONDS=$(echo "scale=3; $ELAPSED_MS / 1000" | bc)
 
