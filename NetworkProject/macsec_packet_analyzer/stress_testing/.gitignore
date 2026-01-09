@@ -4,6 +4,10 @@
 *.db-shm
 *.db-wal
 
+# Compiled executables
+live_analyzer
+rest_api_server
+
 # Python cache
 __pycache__/
 *.pyc
