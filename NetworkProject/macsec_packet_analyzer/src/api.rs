@@ -236,22 +236,34 @@ async fn get_summary_stats(
     let total_bytes: u64 = all_flows.iter().map(|f| f.total_bytes).sum();
 
     // Calculate average bandwidth across all flows
+    // Use the overall time span from earliest first_timestamp to latest last_timestamp
     let avg_bandwidth_mbps = if all_flows.is_empty() {
         None
     } else {
-        let total_duration: f64 = all_flows
+        // Find the earliest first_timestamp and latest last_timestamp across all flows
+        let overall_first = all_flows
             .iter()
-            .filter_map(|f| {
-                f.first_timestamp.zip(f.last_timestamp).and_then(|(first, last)| {
-                    last.duration_since(first)
-                        .ok()
-                        .map(|d| d.as_secs_f64())
-                })
-            })
-            .sum();
+            .filter_map(|f| f.first_timestamp)
+            .min();
+        let overall_last = all_flows
+            .iter()
+            .filter_map(|f| f.last_timestamp)
+            .max();
 
-        if total_duration > 0.0 && total_bytes > 0 {
-            Some((total_bytes as f64 * 8.0) / total_duration / 1_000_000.0)
+        let total_duration = overall_first
+            .zip(overall_last)
+            .and_then(|(first, last)| {
+                last.duration_since(first)
+                    .ok()
+                    .map(|d| d.as_secs_f64())
+            });
+
+        if let Some(duration) = total_duration {
+            if duration > 0.0 && total_bytes > 0 {
+                Some((total_bytes as f64 * 8.0) / duration / 1_000_000.0)
+            } else {
+                None
+            }
         } else {
             None
         }

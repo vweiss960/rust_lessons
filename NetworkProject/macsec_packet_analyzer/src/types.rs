@@ -197,6 +197,17 @@ where
     }
 }
 
+/// Metrics from processing a single packet
+/// Used for performance profiling in debug mode
+#[derive(Debug)]
+pub struct ProcessMetrics {
+    pub detected: bool,     // Protocol was detected
+    pub gap_detected: bool, // Gap was found
+    pub detect_us: u128,    // Protocol detection time in microseconds (debug only)
+    pub track_us: u128,     // Flow tracking time in microseconds (debug only)
+    pub total_us: u128,     // Total processing time including overhead (debug only)
+}
+
 /// Statistics from packet capture source
 #[derive(Debug, Clone)]
 pub struct CaptureStats {

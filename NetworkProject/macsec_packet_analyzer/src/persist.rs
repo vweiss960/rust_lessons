@@ -7,6 +7,7 @@
 use crate::analysis::flow::FlowTracker;
 use crate::db::Database;
 use crate::error::CaptureError;
+use crate::types::{FlowStats, SequenceGap};
 use std::sync::{Arc, Mutex};
 
 /// Persistence manager for syncing analysis results to database
@@ -60,6 +61,39 @@ impl PersistenceManager {
     /// Flush all pending data to database (same as persist_flows for SQLite)
     pub fn flush(&self, tracker: &FlowTracker) -> Result<(), CaptureError> {
         self.persist_flows(tracker)
+    }
+
+    /// Clone the persistence manager for use in async/blocking threads
+    /// Returns a new instance that shares the same database Arc
+    pub fn clone_for_async(&self) -> Self {
+        Self {
+            db: Arc::clone(&self.db),
+        }
+    }
+
+    /// Persist already-fetched stats and gaps (for async writes)
+    /// This method takes pre-fetched data to avoid holding locks in async context
+    pub fn persist_stats_and_gaps(
+        &self,
+        (stats, gaps): (Vec<FlowStats>, Vec<SequenceGap>),
+    ) -> Result<(), CaptureError> {
+        let mut db = self.db.lock().map_err(|_| {
+            CaptureError::DatabaseError("Failed to lock database".to_string())
+        })?;
+
+        // Persist all flow statistics
+        for flow_stat in stats {
+            db.insert_flow(&flow_stat)?;
+            // Also persist enhanced statistics
+            db.insert_statistics(&flow_stat)?;
+        }
+
+        // Persist all gaps
+        for gap in gaps {
+            db.insert_gap(&gap)?;
+        }
+
+        Ok(())
     }
 }
 

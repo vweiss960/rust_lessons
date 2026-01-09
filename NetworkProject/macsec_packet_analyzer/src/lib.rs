@@ -51,6 +51,9 @@ pub use capture::{AfPacketCapture, XdpCapture};
 #[cfg(all(target_os = "linux", feature = "napatech"))]
 pub use capture::{NapatechCapture, NapatechConfig, NapatechCaptureMode, NapatechStats};
 
+#[cfg(all(feature = "async", feature = "pcap"))]
+pub use capture::{ReplayCapture, ReplayMode};
+
 pub use error::{AnalysisError, CaptureError, ParseError};
 pub use protocol::{MACsecParser, SequenceParser, ProtocolRegistry, RegistryStats};
 pub use types::{AnalyzedPacket, AnalysisReport, FlowId, FlowStats, SequenceGap};

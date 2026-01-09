@@ -255,15 +255,16 @@ echo ""
 
 # Run analyzer and measure its actual runtime (not including sleep loops)
 echo -n "Processing"
+ANALYZE_START=$(date +%s%3N)
 if [ "$VERBOSE" = "true" ]; then
-    ANALYZE_START=$(date +%s%3N)
-    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast --debug 2>&1 | head -50
-    ANALYZE_END=$(date +%s%3N)
+    # Run with debug output and capture it for timing metrics
+    ANALYZER_OUTPUT=$("$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast --debug 2>&1)
+    echo "$ANALYZER_OUTPUT" | head -50
 else
-    ANALYZE_START=$(date +%s%3N)
     "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast > /dev/null 2>&1
-    ANALYZE_END=$(date +%s%3N)
+    ANALYZER_OUTPUT=""
 fi
+ANALYZE_END=$(date +%s%3N)
 echo ""
 
 ELAPSED_MS=$((ANALYZE_END - ANALYZE_START))
@@ -271,6 +272,36 @@ ELAPSED_SECONDS=$(echo "scale=3; $ELAPSED_MS / 1000" | bc)
 
 echo -e "${GREEN}✓ Analysis complete (${ELAPSED_SECONDS}s)${NC}"
 echo ""
+
+# Extract timing metrics from debug output if available
+# First try the final report format: "=== Per-Packet Timing (Debug Mode) ==="
+# Then fall back to periodic format: [30.0s] ... | Timing: detect=2.3µs, track=3.1µs
+if [ "$VERBOSE" = "true" ] && [ -n "$ANALYZER_OUTPUT" ]; then
+    # Try final timing report section
+    TIMING_REPORT=$(echo "$ANALYZER_OUTPUT" | grep -A 3 "Per-Packet Timing (Debug Mode)")
+    if [ -n "$TIMING_REPORT" ]; then
+        echo -e "${YELLOW}Per-Packet Timing (Final Report):${NC}"
+        echo "$TIMING_REPORT" | grep -E "Protocol detection|Flow tracking|Total per-packet" | sed 's/^/  /'
+        echo ""
+    else
+        # Fall back to periodic timing from debug output
+        TIMING_LINE=$(echo "$ANALYZER_OUTPUT" | grep "Timing:" | tail -1)
+        if [ -n "$TIMING_LINE" ]; then
+            # Parse detect time: extract number before "µs," after "detect="
+            DETECT_TIME=$(echo "$TIMING_LINE" | sed -n 's/.*detect=\([0-9.]*\)µs.*/\1/p')
+            # Parse track time: extract number before "µs" after "track="
+            TRACK_TIME=$(echo "$TIMING_LINE" | sed -n 's/.*track=\([0-9.]*\)µs.*/\1/p')
+
+            if [ -n "$DETECT_TIME" ] && [ -n "$TRACK_TIME" ]; then
+                echo -e "${YELLOW}Per-Packet Timing (Periodic Debug Output):${NC}"
+                echo "  Protocol detection: $DETECT_TIME µs"
+                echo "  Flow tracking:      $TRACK_TIME µs"
+                echo "  Total per-packet:   $(echo "scale=2; $DETECT_TIME + $TRACK_TIME" | bc) µs"
+                echo ""
+            fi
+        fi
+    fi
+fi
 
 # ============================================================================
 # Query results via REST API

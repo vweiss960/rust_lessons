@@ -15,6 +15,9 @@ pub mod xdp;
 #[cfg(all(target_os = "linux", feature = "napatech"))]
 pub mod napatech;
 
+#[cfg(all(feature = "async", feature = "pcap"))]
+pub mod replay;
+
 pub use source::PacketSource;
 
 #[cfg(feature = "async")]
@@ -34,3 +37,6 @@ pub use xdp::XdpCapture;
 
 #[cfg(all(target_os = "linux", feature = "napatech"))]
 pub use napatech::{NapatechCapture, NapatechConfig, NapatechCaptureMode, NapatechStats};
+
+#[cfg(all(feature = "async", feature = "pcap"))]
+pub use replay::{ReplayCapture, ReplayMode};

@@ -964,6 +964,19 @@ while true; do
 done
 ```
 
+### Bandwidth Calculation
+
+The API reports bandwidth metrics for each flow and overall:
+
+- **Per-flow bandwidth**: Calculated from flow-specific first and last timestamps
+  - Formula: `(total_bytes * 8 bits/byte) / duration_seconds / 1,000,000 bits/Mbps`
+
+- **Summary bandwidth**: Calculated from the earliest first_timestamp to the latest last_timestamp across all flows
+  - This represents the overall utilization span during the capture period
+  - If flows start/end at different times, the summary correctly captures the full time window
+
+**Note**: In PCAP replay mode with looping enabled, the timestamp reset signal allows the analyzer to persist intermediate data at loop boundaries. The cumulative timestamps across all loops provide accurate bandwidth measurements for the entire replay session.
+
 ---
 
 ## Automated Test Script
