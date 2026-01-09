@@ -1,10 +1,17 @@
 #!/bin/bash
 
 ################################################################################
-# Proper Stress Test Harness for MACsec Analyzer
+# Enhanced Stress Test Harness for MACsec Analyzer
 #
-# This script measures ACTUAL packet processing speed, not looping speed.
-# It generates synthetic PCAPs and processes them once to measure throughput.
+# This script:
+# 1. Cleans old binaries, databases, and PCAP files from stress_testing folder
+# 2. Builds fresh release binaries and copies them to stress_testing folder
+# 3. Generates synthetic PCAP test data in stress_testing folder
+# 4. Processes packets through live_analyzer with timing
+# 5. Makes results queryable via rest_api_server running against same database
+#
+# All artifacts (binaries, databases, PCAP files) are stored in the
+# stress_testing folder itself for convenience.
 #
 # Usage:
 #   ./stress_test.sh --packets 10000 --duration 60
@@ -28,10 +35,17 @@ FLOWS=""
 DURATION=60
 GAP_RATE=0.05
 SEED=42
-OUTPUT_DIR="/tmp/stress_tests"
+PROTOCOL="macsec"
 VERBOSE=false
-KEEP_PCAP=false
 PORT=9998
+
+# Get paths - stress_testing folder is where this script lives
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PCAP_FILE="$SCRIPT_DIR/test.pcap"
+DB_FILE="$SCRIPT_DIR/stress_tests.db"
+LIVE_ANALYZER_BIN="$SCRIPT_DIR/live_analyzer"
+REST_API_BIN="$SCRIPT_DIR/rest_api_server"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -52,21 +66,25 @@ while [[ $# -gt 0 ]]; do
             GAP_RATE="$2"
             shift 2
             ;;
+        --protocol)
+            PROTOCOL="$2"
+            shift 2
+            ;;
         --seed)
             SEED="$2"
             shift 2
             ;;
-        --output-dir)
-            OUTPUT_DIR="$2"
+        --port)
+            PORT="$2"
             shift 2
             ;;
         --verbose|-v)
             VERBOSE=true
             shift
             ;;
-        --keep-pcap)
-            KEEP_PCAP=true
-            shift
+        -h|--help)
+            head -n 40 "$0" | tail -n +3
+            exit 0
             ;;
         *)
             echo "Unknown option: $1"
@@ -80,98 +98,124 @@ if [ -z "$FLOWS" ]; then
     FLOWS=$((PACKETS / 10))
 fi
 
-# Ensure directories exist
-mkdir -p "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR/pcaps"
-
 # Make sure we have required tools
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}Error: python3 not found${NC}"
     exit 1
 fi
 
-if ! [ -f ./target/release/live_analyzer ]; then
-    echo -e "${RED}Error: ./target/release/live_analyzer not found${NC}"
-    echo "Run: cargo build --release"
-    exit 1
-fi
-
-if ! [ -f ./target/release/rest_api_server ]; then
-    echo -e "${RED}Error: ./target/release/rest_api_server not found${NC}"
-    echo "Run: cargo build --release"
+if ! command -v cargo &> /dev/null; then
+    echo -e "${RED}Error: cargo not found${NC}"
     exit 1
 fi
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  MACsec Analyzer - Proper Stress Test                     ║${NC}"
+echo -e "${BLUE}║  MACsec Analyzer - Enhanced Stress Test                   ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
 echo -e "${GREEN}Configuration:${NC}"
 echo "  Packets to generate:  $PACKETS"
 echo "  Unique flows:         $FLOWS"
+echo "  Protocol:             $PROTOCOL"
 echo "  Gap rate:             ${GAP_RATE} ($(echo "scale=1; $GAP_RATE * 100" | bc)%)"
 echo "  Test duration:        ${DURATION}s"
-echo "  Output directory:     $OUTPUT_DIR"
+echo "  PCAP file:            $PCAP_FILE"
+echo "  Database:             $DB_FILE"
+echo "  Binaries location:    $SCRIPT_DIR"
 echo ""
 
 # ============================================================================
-# Step 1: Generate synthetic PCAP
+# Step 1: Clean old binaries, databases, and PCAP files
 # ============================================================================
 
-PCAP_FILE="$OUTPUT_DIR/pcaps/stress_${PACKETS}pkt_${FLOWS}flows.pcap"
-DB_FILE="$OUTPUT_DIR/dbs/stress_${PACKETS}pkt_${FLOWS}flows.db"
+echo -e "${YELLOW}[1/6] Cleaning old artifacts...${NC}"
 
-mkdir -p "$OUTPUT_DIR/dbs"
+# Remove old binaries from stress_testing folder
+rm -f "$LIVE_ANALYZER_BIN" "$REST_API_BIN" 2>/dev/null || true
 
-# Only regenerate if it doesn't exist
-if [ ! -f "$PCAP_FILE" ]; then
-    echo -e "${YELLOW}[1/4] Generating synthetic PCAP...${NC}"
+# Remove old databases
+rm -f "$DB_FILE" "$DB_FILE-shm" "$DB_FILE-wal" 2>/dev/null || true
 
-    python3 - <<EOF > /dev/null
-import subprocess
-import sys
+# Remove old PCAP files
+rm -f "$SCRIPT_DIR"/test.pcap 2>/dev/null || true
 
-args = [
-    'python3', '$(dirname "$0")/pcap_generator.py',
-    '--packets', '$PACKETS',
-    '--flows', '$FLOWS',
-    '--gap-rate', '$GAP_RATE',
-    '--seed', '$SEED',
-    '--output', '$PCAP_FILE',
-]
+echo -e "${GREEN}✓ Old artifacts cleaned${NC}"
+echo ""
 
-if '$VERBOSE' == 'true':
-    args.append('--verbose')
+# ============================================================================
+# Step 2: Build release binaries
+# ============================================================================
 
-result = subprocess.run(args, capture_output=False)
-sys.exit(result.returncode)
-EOF
+echo -e "${YELLOW}[2/6] Building release binaries...${NC}"
 
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}✗ Failed to generate PCAP${NC}"
-        exit 1
-    fi
+cd "$PROJECT_ROOT"
 
-    PCAP_SIZE=$(du -h "$PCAP_FILE" | cut -f1)
-    echo -e "${GREEN}✓ Generated PCAP: $PCAP_FILE ($PCAP_SIZE)${NC}"
+if cargo build --bin live_analyzer --release 2>&1 | tail -5; then
+    echo -e "${GREEN}✓ live_analyzer built successfully${NC}"
 else
-    echo -e "${GREEN}[1/4] Using existing PCAP: $(du -h "$PCAP_FILE" | cut -f1)${NC}"
+    echo -e "${RED}✗ Failed to build live_analyzer${NC}"
+    exit 1
+fi
+
+if cargo build --bin rest_api_server --release 2>&1 | tail -5; then
+    echo -e "${GREEN}✓ rest_api_server built successfully${NC}"
+else
+    echo -e "${RED}✗ Failed to build rest_api_server${NC}"
+    exit 1
 fi
 echo ""
 
 # ============================================================================
-# Step 2: Verify packet count in PCAP
+# Step 3: Copy binaries to stress_testing folder
 # ============================================================================
 
-echo -e "${YELLOW}[2/4] Verifying packet count...${NC}"
+echo -e "${YELLOW}[3/6] Copying binaries to stress_testing folder...${NC}"
 
-ACTUAL_PACKETS=$(python3 - <<'PYEOF'
+cp "$PROJECT_ROOT/target/release/live_analyzer" "$LIVE_ANALYZER_BIN"
+cp "$PROJECT_ROOT/target/release/rest_api_server" "$REST_API_BIN"
+
+echo -e "${GREEN}✓ Binaries copied to $SCRIPT_DIR${NC}"
+echo ""
+
+# ============================================================================
+# Step 4: Generate synthetic PCAP
+# ============================================================================
+
+echo -e "${YELLOW}[4/6] Generating synthetic PCAP...${NC}"
+
+cd "$PROJECT_ROOT"
+
+python3 stress_testing/pcap_generator.py \
+    --packets "$PACKETS" \
+    --flows "$FLOWS" \
+    --protocol "$PROTOCOL" \
+    --gap-rate "$GAP_RATE" \
+    --seed "$SEED" \
+    --output "$PCAP_FILE" \
+    $([ "$VERBOSE" = "true" ] && echo "--verbose" || echo "")
+
+if [ ! -f "$PCAP_FILE" ]; then
+    echo -e "${RED}✗ Failed to generate PCAP${NC}"
+    exit 1
+fi
+
+PCAP_SIZE=$(du -h "$PCAP_FILE" | cut -f1)
+echo -e "${GREEN}✓ Generated PCAP: $PCAP_FILE ($PCAP_SIZE)${NC}"
+echo ""
+
+# ============================================================================
+# Step 5: Verify packet count in PCAP
+# ============================================================================
+
+echo -e "${YELLOW}[5/6] Verifying packet count...${NC}"
+
+ACTUAL_PACKETS=$(python3 << PYEOF
 import struct
 import sys
 
 try:
-    with open(''"$PCAP_FILE"'', 'rb') as f:
+    with open("$PCAP_FILE", 'rb') as f:
         # Skip global header
         f.seek(24)
         count = 0
@@ -198,31 +242,28 @@ echo -e "${GREEN}✓ PCAP contains $ACTUAL_PACKETS packets${NC}"
 echo ""
 
 # ============================================================================
-# Step 3: Clean and run analyzer
+# Step 6: Run analyzer and measure processing time
 # ============================================================================
 
-echo -e "${YELLOW}[3/4] Running analyzer...${NC}"
+echo -e "${YELLOW}[6/6] Processing packets and measuring performance...${NC}"
 
-# Clean database
-rm -f "$DB_FILE" "${DB_FILE}-shm" "${DB_FILE}-wal"
+# Clean database before running
+rm -f "$DB_FILE" "$DB_FILE-shm" "$DB_FILE-wal"
 
-# Run analyzer with timeout
-echo "Command: ./target/release/live_analyzer $PCAP_FILE $DB_FILE --replay --mode fast"
+echo "Command: $LIVE_ANALYZER_BIN $PCAP_FILE $DB_FILE --replay --mode fast"
 echo ""
 
 ANALYZE_START=$(date +%s%3N)
 
 if [ "$VERBOSE" = "true" ]; then
-    timeout ${DURATION} ./target/release/live_analyzer \
-        "$PCAP_FILE" "$DB_FILE" --replay --mode fast --debug 2>&1 | head -50 &
+    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast --debug 2>&1 | head -50 &
     ANALYZER_PID=$!
 else
-    timeout ${DURATION} ./target/release/live_analyzer \
-        "$PCAP_FILE" "$DB_FILE" --replay --mode fast > /dev/null 2>&1 &
+    "$LIVE_ANALYZER_BIN" "$PCAP_FILE" "$DB_FILE" --replay --mode fast > /dev/null 2>&1 &
     ANALYZER_PID=$!
 fi
 
-# Show progress dots
+# Show progress dots with timeout
 echo -n "Processing."
 for i in $(seq 1 $DURATION); do
     sleep 1
@@ -244,33 +285,43 @@ echo -e "${GREEN}✓ Analysis complete (${ELAPSED_SECONDS}s)${NC}"
 echo ""
 
 # ============================================================================
-# Step 4: Query results
+# Query results via REST API
 # ============================================================================
 
-echo -e "${YELLOW}[4/4] Analyzing results...${NC}"
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo -e "${YELLOW}Querying results via REST API...${NC}"
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo ""
 
-# Increase port to avoid conflicts
-PORT=$((9998 + RANDOM % 100))
+# Find an available port
+ACTUAL_PORT=$PORT
+while netstat -tln 2>/dev/null | grep -q ":$ACTUAL_PORT "; do
+    ACTUAL_PORT=$((ACTUAL_PORT + 1))
+done
+
+echo "Starting rest_api_server on port $ACTUAL_PORT..."
 
 # Start REST API server
-./target/release/rest_api_server --db "$DB_FILE" --port $PORT > /dev/null 2>&1 &
+"$REST_API_BIN" --db "$DB_FILE" --port $ACTUAL_PORT > /dev/null 2>&1 &
 REST_PID=$!
 
 # Give it time to start
-sleep 1
+sleep 2
 
 # Query stats
-STATS=$(curl -s http://localhost:$PORT/api/v1/stats/summary)
+echo ""
+echo -e "${GREEN}Fetching statistics from REST API...${NC}"
+STATS=$(curl -s "http://localhost:$ACTUAL_PORT/api/v1/stats/summary" || echo "{}")
 
 # Kill REST server
 kill $REST_PID 2>/dev/null || true
 wait $REST_PID 2>/dev/null || true
 
-# Extract fields (handle jq failures gracefully)
-PROCESSED_PACKETS=$(echo "$STATS" | jq -r '.total_packets_received // "0"' 2>/dev/null || echo "0")
-TOTAL_GAPS=$(echo "$STATS" | jq -r '.total_gaps // "0"' 2>/dev/null || echo "0")
-TOTAL_FLOWS=$(echo "$STATS" | jq -r '.total_flows // "0"' 2>/dev/null || echo "0")
-BANDWIDTH=$(echo "$STATS" | jq -r '.avg_bandwidth_mbps // "0"' 2>/dev/null || echo "0")
+# Extract fields with error handling
+PROCESSED_PACKETS=$(echo "$STATS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_packets_received', 0))" 2>/dev/null || echo "0")
+TOTAL_GAPS=$(echo "$STATS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_gaps', 0))" 2>/dev/null || echo "0")
+TOTAL_FLOWS=$(echo "$STATS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_flows', 0))" 2>/dev/null || echo "0")
+BANDWIDTH=$(echo "$STATS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('avg_bandwidth_mbps', 0))" 2>/dev/null || echo "0")
 
 if [ "$PROCESSED_PACKETS" = "0" ] || [ -z "$PROCESSED_PACKETS" ]; then
     echo -e "${RED}✗ Failed to query results from database${NC}"
@@ -293,6 +344,7 @@ echo -e "${YELLOW}Test Configuration:${NC}"
 echo "  PCAP file:            $PCAP_FILE"
 echo "  Input packets:        $ACTUAL_PACKETS"
 echo "  Unique flows:         $FLOWS"
+echo "  Protocol:             $PROTOCOL"
 echo "  Gap injection rate:   ${GAP_RATE} ($(echo "scale=1; $GAP_RATE * 100" | bc)%)"
 echo "  Test duration:        ${ELAPSED_SECONDS}s"
 echo ""
@@ -331,35 +383,18 @@ else
 fi
 
 echo ""
-
-# ============================================================================
-# Save results
-# ============================================================================
-
-RESULTS_CSV="$OUTPUT_DIR/results.csv"
-
-# Create header if file doesn't exist
-if [ ! -f "$RESULTS_CSV" ]; then
-    echo "timestamp,packets,flows,duration_s,throughput_pps,per_packet_us,gaps_detected,bandwidth_mbps,looping" > "$RESULTS_CSV"
-fi
-
-# Append results
-TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S")
-echo "$TIMESTAMP,$ACTUAL_PACKETS,$TOTAL_FLOWS,$ELAPSED_SECONDS,$THROUGHPUT,$PER_PACKET_US,$TOTAL_GAPS,$BANDWIDTH,$LOOPS" >> "$RESULTS_CSV"
-
-echo -e "${GREEN}✓ Results saved to: $RESULTS_CSV${NC}"
-
-# Display summary across all tests
-echo ""
-echo -e "${YELLOW}All Test Results:${NC}"
-cat "$RESULTS_CSV" | column -t -s, | tail -5
-
-# Database preserved
-echo ""
-echo -e "${GREEN}Database preserved at: $DB_FILE${NC}"
-if ! [ "$KEEP_PCAP" = "true" ]; then
-    echo -e "${YELLOW}(PCAP will be reused for subsequent runs)${NC}"
-fi
-
-echo ""
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+echo -e "${GREEN}Artifacts stored in:${NC}"
+echo "  PCAP file:        $PCAP_FILE"
+echo "  Database:         $DB_FILE"
+echo "  Binaries:         $SCRIPT_DIR/{live_analyzer,rest_api_server}"
+echo ""
+
+echo -e "${YELLOW}To query results later:${NC}"
+echo "  $REST_API_BIN --db $DB_FILE --port 9999"
+echo "  curl http://localhost:9999/api/v1/stats/summary"
+echo ""
+
+echo -e "${GREEN}✓ Stress test complete${NC}"
