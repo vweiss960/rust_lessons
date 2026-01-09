@@ -19,6 +19,8 @@ import random
 import time
 import argparse
 import sys
+import json
+import os
 from dataclasses import dataclass
 from typing import List, Tuple
 from datetime import datetime, timezone
@@ -225,7 +227,7 @@ def generate_synthetic_packets(
     macsec_ratio: float = 0.5,
     ipsec_ratio: float = 0.3,
     generic_ratio: float = 0.2
-) -> List[bytes]:
+) -> Tuple[List[bytes], dict]:
     """
     Generate synthetic packets with:
     - Multiple flows (different source MACs for MACsec, IPs for IPsec)
@@ -245,7 +247,7 @@ def generate_synthetic_packets(
         generic_ratio: Proportion of generic IPv4 packets (0.0-1.0, used with 'mixed')
 
     Returns:
-        List of packet data (bytes)
+        Tuple of (packet list, gap statistics dict)
     """
 
     if seed is not None:
@@ -272,7 +274,7 @@ def generate_synthetic_packets(
         protocols = [protocol]
         protocols_weights = [1.0]
 
-    # Initialize flows
+    # Initialize flows with gap tracking
     for flow_id in range(num_flows):
         flow_states[flow_id] = {
             'seq_num': random.randint(1, 1000000),
@@ -280,6 +282,8 @@ def generate_synthetic_packets(
             'protocol': random.choices(protocols, weights=protocols_weights)[0],
             'src_ip': f'192.168.{(flow_id >> 8) & 0xFF}.{flow_id & 0xFF}',
             'dst_ip': f'10.0.{(flow_id >> 8) & 0xFF}.{flow_id & 0xFF}',
+            'lost_packets': 0,  # Track lost packets per flow
+            'gaps': 0,  # Track gap count per flow
         }
 
     packet_sizes = [64, 128, 256, 512, 1024, 1500]
@@ -294,7 +298,10 @@ def generate_synthetic_packets(
 
         # Inject gaps (skip sequence numbers to simulate packet loss)
         if random.random() < gap_rate:
-            flow['seq_num'] += random.randint(2, 20)  # Skip 2-20 packets
+            gap_size = random.randint(2, 20)  # Skip 2-20 packets
+            flow['seq_num'] += gap_size
+            flow['lost_packets'] += gap_size
+            flow['gaps'] += 1
 
         # Randomize packet size
         payload_size = random.choice(packet_sizes)
@@ -371,7 +378,22 @@ def generate_synthetic_packets(
     if verbose:
         print(f"[Generator] Complete: {len(packets)} packets generated")
 
-    return packets
+    # Build gap statistics
+    gap_stats = {
+        'total_packets_generated': len(packets),
+        'total_flows': num_flows,
+        'gap_rate': gap_rate,
+        'flows': {}
+    }
+
+    for flow_id, state in flow_states.items():
+        gap_stats['flows'][str(flow_id)] = {
+            'protocol': state['protocol'],
+            'lost_packets': state['lost_packets'],
+            'gaps_count': state['gaps'],
+        }
+
+    return packets, gap_stats
 
 
 def main():
@@ -454,7 +476,7 @@ def main():
         print()
 
     # Generate packets
-    packets = generate_synthetic_packets(
+    packets, gap_stats = generate_synthetic_packets(
         num_packets=args.packets,
         num_flows=num_flows,
         gap_rate=args.gap_rate,
@@ -472,8 +494,15 @@ def main():
         writer.write_packet(packet)
     writer.close()
 
+    # Write gap statistics to JSON file
+    json_output = os.path.splitext(args.output)[0] + '.json'
+    with open(json_output, 'w') as f:
+        json.dump(gap_stats, f, indent=2)
+
     if args.verbose:
-        import os
+        print(f"[Generator] Gap statistics written to: {json_output}")
+
+    if args.verbose:
         file_size = os.path.getsize(args.output)
         print(f"\nOutput file: {args.output}")
         print(f"File size: {file_size / 1024:.1f} KB")

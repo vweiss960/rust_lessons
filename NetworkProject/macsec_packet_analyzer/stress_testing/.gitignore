@@ -1,5 +1,6 @@
 # Generated test files
 *.pcap
+test.json
 *.db
 *.db-shm
 *.db-wal

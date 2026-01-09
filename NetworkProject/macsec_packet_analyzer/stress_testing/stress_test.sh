@@ -334,6 +334,47 @@ fi
 THROUGHPUT=$(echo "scale=1; $PROCESSED_PACKETS / $ELAPSED_SECONDS" | bc)
 PER_PACKET_US=$(echo "scale=2; 1000000 / $THROUGHPUT" | bc)
 
+# Read expected lost packets from JSON file
+JSON_FILE="$SCRIPT_DIR/test.json"
+if [ -f "$JSON_FILE" ]; then
+    # Parse expected lost packets by protocol from JSON
+    EXPECTED_LOST_MACSEC=$(python3 << JSONEOF
+import json
+import sys
+try:
+    with open("$JSON_FILE", 'r') as f:
+        data = json.load(f)
+    total = 0
+    for flow_id, flow_stats in data.get('flows', {}).items():
+        if flow_stats.get('protocol') == 'macsec':
+            total += flow_stats.get('lost_packets', 0)
+    print(total)
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    print(0)
+JSONEOF
+)
+
+    EXPECTED_LOST_IPSEC=$(python3 << JSONEOF
+import json
+import sys
+try:
+    with open("$JSON_FILE", 'r') as f:
+        data = json.load(f)
+    total = 0
+    for flow_id, flow_stats in data.get('flows', {}).items():
+        if flow_stats.get('protocol') == 'ipsec':
+            total += flow_stats.get('lost_packets', 0)
+    print(total)
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    print(0)
+JSONEOF
+)
+
+    DETECTED_TOTAL_LOST=$(echo "$STATS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('total_lost_packets', 0))" 2>/dev/null || echo "0")
+fi
+
 echo ""
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}STRESS TEST RESULTS${NC}"
@@ -380,6 +421,54 @@ elif (( $(echo "$THROUGHPUT > 5000" | bc -l) )); then
     echo "  Status:               ${YELLOW}Moderate (${THROUGHPUT} pps)${NC}"
 else
     echo "  Status:               ${RED}Degraded (${THROUGHPUT} pps)${NC}"
+fi
+
+echo ""
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}VALIDATION: Generated vs Detected Lost Packets${NC}"
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+if [ -f "$JSON_FILE" ]; then
+    echo -e "${YELLOW}Expected (from PCAP generator):${NC}"
+    echo "  MACsec lost packets:   $EXPECTED_LOST_MACSEC"
+    echo "  IPsec lost packets:    $EXPECTED_LOST_IPSEC"
+    echo "  Total expected:        $((EXPECTED_LOST_MACSEC + EXPECTED_LOST_IPSEC))"
+    echo ""
+
+    echo -e "${YELLOW}Detected (from analyzer):${NC}"
+    echo "  Total detected:        $DETECTED_TOTAL_LOST"
+    echo ""
+
+    # Calculate if they match (with tolerance for protocol filtering)
+    EXPECTED_TOTAL=$((EXPECTED_LOST_MACSEC + EXPECTED_LOST_IPSEC))
+    if [ "$DETECTED_TOTAL_LOST" = "$EXPECTED_TOTAL" ]; then
+        echo -e "${GREEN}✓ MATCH: Generated and detected lost packets are equal${NC}"
+    elif [ -z "$DETECTED_TOTAL_LOST" ] || [ "$DETECTED_TOTAL_LOST" = "0" ]; then
+        echo -e "${RED}✗ NO MATCH: Analyzer detected 0 lost packets${NC}"
+        echo "  Expected: $EXPECTED_TOTAL"
+        echo "  Detected: $DETECTED_TOTAL_LOST"
+        echo ""
+        echo -e "${YELLOW}Possible issues:${NC}"
+        echo "  - Analyzer may not be detecting gaps correctly"
+        echo "  - Protocol filtering may be excluding packets"
+        echo "  - Database may not be storing gap information"
+    else
+        DIFFERENCE=$((EXPECTED_TOTAL - DETECTED_TOTAL_LOST))
+        PERCENTAGE=$(echo "scale=1; ($DIFFERENCE / $EXPECTED_TOTAL) * 100" | bc)
+        echo -e "${YELLOW}⚠ MISMATCH: Generated and detected lost packets differ${NC}"
+        echo "  Expected: $EXPECTED_TOTAL"
+        echo "  Detected: $DETECTED_TOTAL_LOST"
+        echo "  Difference: $DIFFERENCE packets ($PERCENTAGE%)"
+        echo ""
+        echo -e "${YELLOW}Possible issues:${NC}"
+        echo "  - Only MACsec gaps are being detected (IPsec gaps filtered)"
+        echo "  - Some gaps may not be properly recorded"
+        echo "  - Wraparound handling may differ between generator and analyzer"
+    fi
+else
+    echo -e "${RED}✗ JSON file not found: $JSON_FILE${NC}"
+    echo "  Gap statistics file was not generated"
 fi
 
 echo ""
