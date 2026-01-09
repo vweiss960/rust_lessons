@@ -145,14 +145,13 @@ class MACsecPacket:
 
     def pack(self) -> bytes:
         """Pack MACsec packet (TCI/AN + packet number + SCI + payload)"""
-        # TCI (1 byte) bit layout:
-        # Bit 7: Version (0)
-        # Bit 6: Control Port (C) = 0
-        # Bit 5: Encryption (E) = 0
-        # Bit 4: SC (Security Channel present) = 1 (SCI is included)
+        # TCI (1 byte) bit layout (from MSB to LSB):
+        # Bits 7-6: Version (00)
+        # Bit 5: SC (Security Channel present) = 1 (SCI is included)
+        # Bit 4: E (Encryption) = 0
         # Bits 3-2: SCI/Short SCI length = 00 (full 8-byte SCI)
-        # Bits 1-0: Association Number (AN) = 00
-        tci = 0x18  # Binary: 00011000 (Version 0, SC=1, SCI length 00, AN in next byte)
+        # Bits 1-0: AN (Association Number) = 01
+        tci = 0x21  # Binary: 0010 0001 (Version 0, SC=1, SCI length 00, AN=01)
         # AN (1 byte): association number
         an = 0x00
         # Packet number (4 bytes, big-endian)
