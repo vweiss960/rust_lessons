@@ -138,20 +138,23 @@ class IPv4Packet:
 class MACsecPacket:
     """MACsec packet builder (simplified)"""
 
-    def __init__(self, packet_number: int, payload: bytes = b''):
+    def __init__(self, packet_number: int, sci: int = 0, payload: bytes = b''):
         self.packet_number = packet_number
+        self.sci = sci  # Secure Channel Identifier (8 bytes)
         self.payload = payload
 
     def pack(self) -> bytes:
-        """Pack MACsec packet (TCI/AN + packet number + payload)"""
+        """Pack MACsec packet (TCI/AN + packet number + SCI + payload)"""
         # TCI (1 byte): version, C, E, C, SCI length
         tci = 0x08  # Version 0, no C, no E, C=0
         # AN (1 byte): association number
         an = 0x00
         # Packet number (4 bytes, big-endian)
         pkt_num_bytes = struct.pack('>I', self.packet_number)
+        # SCI (8 bytes, big-endian) - Secure Channel Identifier for flow identification
+        sci_bytes = struct.pack('>Q', self.sci)
 
-        return bytes([tci, an]) + pkt_num_bytes + self.payload
+        return bytes([tci, an]) + pkt_num_bytes + sci_bytes + self.payload
 
 
 class IPsecPacket:
@@ -279,6 +282,7 @@ def generate_synthetic_packets(
         flow_states[flow_id] = {
             'seq_num': random.randint(1, 1000000),
             'spi': random.randint(256, 65536),
+            'sci': flow_id,  # Use flow_id as SCI for unique flow identification in MACsec
             'protocol': random.choices(protocols, weights=protocols_weights)[0],
             'src_ip': f'192.168.{(flow_id >> 8) & 0xFF}.{flow_id & 0xFF}',
             'dst_ip': f'10.0.{(flow_id >> 8) & 0xFF}.{flow_id & 0xFF}',
@@ -311,17 +315,22 @@ def generate_synthetic_packets(
 
         if proto_type == 'macsec':
             # Build MACsec packet
+            # Note: MACsec payload now includes: TCI(1) + AN(1) + PacketNum(4) + SCI(8) + data
             macsec = MACsecPacket(
                 packet_number=flow['seq_num'],
-                payload=b'\x00' * (payload_size - 6)  # 6 bytes for TCI+AN+pkt_num header
+                sci=flow['sci'],  # Unique flow identifier
+                payload=b'\x00' * (payload_size - 14)  # 14 bytes for TCI+AN+pkt_num+SCI header
             )
             payload = macsec.pack()
             ethertype = 0x88E5  # MACsec
 
             # Ethernet + MACsec
+            # Use flow-specific source MAC for additional flow differentiation
+            src_mac_bytes = (flow['sci']).to_bytes(6, 'big')
+            src_mac = ':'.join(f'{b:02x}' for b in src_mac_bytes)
             eth = EthernetFrame(
                 dst_mac='00:11:22:33:44:55',
-                src_mac='66:77:88:99:aa:bb',
+                src_mac=src_mac,
                 ethertype=ethertype,
                 payload=payload
             )
