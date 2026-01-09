@@ -32,6 +32,16 @@
 
 mod analyzer;
 
+// Define write task for async database operations
+use macsec_packet_analyzer::types::{FlowStats, SequenceGap};
+
+#[derive(Clone)]
+struct WriteTask {
+    stats: Vec<FlowStats>,
+    gaps: Vec<SequenceGap>,
+    packet_count: u64,
+}
+
 use macsec_packet_analyzer::{
     capture::AsyncPacketSource,
     analysis::flow::FlowTracker,
@@ -45,6 +55,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::signal;
 use tokio::task::spawn_blocking;
+use tokio::sync::mpsc;
 
 // Feature-gated imports for different capture backends
 #[cfg(all(feature = "async", feature = "pcap"))]
@@ -293,6 +304,18 @@ fn print_usage(program: &str) {
     eprintln!("  To build with Napatech:  cargo build --bin live_analyzer --features napatech");
 }
 
+/// Handle write queue - processes batched database writes asynchronously
+/// This task receives WriteTask items from the channel and persists them to the database
+async fn handle_write_queue(mut rx: mpsc::Receiver<WriteTask>, persistence: PersistenceManager) {
+    while let Some(task) = rx.recv().await {
+        // Write to database without blocking the main packet processing loop
+        // WAL mode allows this to happen concurrently with packet processing
+        if let Err(e) = persistence.persist_stats_and_gaps((task.stats, task.gaps)) {
+            eprintln!("Warning: Write queue persistence failed: {}", e);
+        }
+    }
+}
+
 /// Generic implementation that works with any AsyncPacketSource
 async fn run_analyzer_impl<T: AsyncPacketSource>(
     capture: &mut T,
@@ -329,8 +352,23 @@ async fn run_analyzer_impl<T: AsyncPacketSource>(
     // Create protocol registry
     let registry = Arc::new(ProtocolRegistry::new());
 
+    // Create async write queue channel (buffered to allow batching)
+    // Channel size of 2 allows one write to be queued while another is in flight
+    let (write_tx, write_rx) = mpsc::channel(2);
+
+    // Spawn writer task to handle database writes asynchronously
+    let writer_task = {
+        let persistence = persistence.clone();
+        tokio::spawn(async move {
+            handle_write_queue(write_rx, persistence).await;
+        })
+    };
+
     // Run the generic analyzer with any AsyncPacketSource
-    run_analyzer(capture, &registry, &flow_tracker, &persistence, debug).await?;
+    run_analyzer(capture, &registry, &flow_tracker, &persistence, debug, write_tx).await?;
+
+    // Wait for writer task to finish any remaining writes
+    let _ = writer_task.await;
 
     Ok(())
 }
@@ -343,6 +381,7 @@ async fn run_analyzer<T: AsyncPacketSource>(
     flow_tracker: &Arc<FlowTracker>,
     persistence: &PersistenceManager,
     debug: bool,
+    write_tx: mpsc::Sender<WriteTask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Setup signal handling for graceful shutdown
     let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())?;
@@ -388,22 +427,33 @@ async fn run_analyzer<T: AsyncPacketSource>(
                             gap_count += 1;
                         }
 
-                        // Periodic persistence (reduced frequency for better throughput)
-                        if last_persist.elapsed() > persist_interval || packet_count % persist_packet_threshold == 0 {
-                            // Snapshot tracker data for async write (no lock needed, DashMap is thread-safe)
+                        // Periodic persistence - only write every 100K packets (no time-based threshold)
+                        // This ensures better batching and write efficiency
+                        if packet_count % persist_packet_threshold == 0 {
+                            // Snapshot tracker data for async write
                             let stats = flow_tracker.get_stats();
                             let gaps = flow_tracker.get_gaps();
                             let num_flows = stats.len();
-                            let stats_snapshot = (stats, gaps);
 
-                            // Spawn async database write to avoid blocking packet processing
-                            let persistence_clone = persistence.clone_for_async();
-                            spawn_blocking(move || {
-                                // This runs in a thread pool and doesn't block the main async loop
-                                if let Err(e) = persistence_clone.persist_stats_and_gaps(stats_snapshot) {
-                                    eprintln!("Warning: Async persistence failed: {}", e);
-                                }
-                            });
+                            // Send to write queue (non-blocking)
+                            // If queue is full, this will wait, but only briefly
+                            let write_task = WriteTask {
+                                stats,
+                                gaps,
+                                packet_count,
+                            };
+
+                            // Try to send without blocking - if queue is full, spawn_blocking instead
+                            if write_tx.try_send(write_task.clone()).is_err() {
+                                // Queue full - spawn blocking write to prevent blocking packet processing
+                                let persistence_clone = persistence.clone();
+                                spawn_blocking(move || {
+                                    // This runs in a thread pool and doesn't block the main async loop
+                                    if let Err(e) = persistence_clone.clone_for_async().persist_stats_and_gaps((write_task.stats, write_task.gaps)) {
+                                        eprintln!("Warning: Async persistence failed: {}", e);
+                                    }
+                                });
+                            }
 
                             last_persist = Instant::now();
 

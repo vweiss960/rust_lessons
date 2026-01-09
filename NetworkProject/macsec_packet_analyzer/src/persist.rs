@@ -11,6 +11,7 @@ use crate::types::{FlowStats, SequenceGap};
 use std::sync::{Arc, Mutex};
 
 /// Persistence manager for syncing analysis results to database
+#[derive(Clone)]
 pub struct PersistenceManager {
     db: Arc<Mutex<Database>>,
 }
