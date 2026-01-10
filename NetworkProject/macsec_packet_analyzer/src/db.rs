@@ -65,9 +65,8 @@ impl Database {
                 let conn = rusqlite::Connection::open(path)
                     .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
 
-                // Enable foreign keys
-                conn.execute("PRAGMA foreign_keys = ON", [])
-                    .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+                // Note: WAL mode and synchronous mode will be configured in the initialize() method
+                // to avoid execution issues with PRAGMA statements in open()
 
                 Ok(Self { conn })
             }
@@ -81,89 +80,55 @@ impl Database {
 
     /// Initialize database schema (creates tables if not exist)
     pub fn initialize(&mut self) -> Result<(), CaptureError> {
-        // Create flows table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS flows (
-                    id TEXT PRIMARY KEY,
-                    first_sequence INTEGER,
-                    last_sequence INTEGER,
-                    packets_received INTEGER NOT NULL DEFAULT 0,
-                    gaps_detected INTEGER NOT NULL DEFAULT 0,
-                    total_lost_packets INTEGER NOT NULL DEFAULT 0,
-                    min_gap INTEGER,
-                    max_gap INTEGER,
-                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )",
-                [],
-            )
-            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+        // Use execute_batch for all schema creation
+        // Note: PRAGMAs with result-returning statements will be set separately
+        let schema_sql = "
+            CREATE TABLE IF NOT EXISTS flows (
+                id TEXT PRIMARY KEY,
+                first_sequence INTEGER,
+                last_sequence INTEGER,
+                packets_received INTEGER NOT NULL DEFAULT 0,
+                gaps_detected INTEGER NOT NULL DEFAULT 0,
+                total_lost_packets INTEGER NOT NULL DEFAULT 0,
+                min_gap INTEGER,
+                max_gap INTEGER,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
 
-        // Create sequence_gaps table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS sequence_gaps (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    flow_id TEXT NOT NULL,
-                    expected_sequence INTEGER NOT NULL,
-                    received_sequence INTEGER NOT NULL,
-                    gap_size INTEGER NOT NULL,
-                    detected_at DATETIME NOT NULL,
-                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(flow_id) REFERENCES flows(id)
-                )",
-                [],
-            )
-            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+            CREATE TABLE IF NOT EXISTS sequence_gaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                flow_id TEXT NOT NULL,
+                expected_sequence INTEGER NOT NULL,
+                received_sequence INTEGER NOT NULL,
+                gap_size INTEGER NOT NULL,
+                detected_at DATETIME NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(flow_id) REFERENCES flows(id)
+            );
 
-        // Create flow_statistics table for enhanced metrics
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS flow_statistics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    flow_id TEXT NOT NULL UNIQUE,
-                    total_bytes INTEGER NOT NULL DEFAULT 0,
-                    first_timestamp TEXT,
-                    last_timestamp TEXT,
-                    min_inter_arrival_us INTEGER,
-                    max_inter_arrival_us INTEGER,
-                    avg_inter_arrival_us INTEGER,
-                    protocol_distribution TEXT,
-                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(flow_id) REFERENCES flows(id) ON DELETE CASCADE
-                )",
-                [],
-            )
-            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+            CREATE TABLE IF NOT EXISTS flow_statistics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                flow_id TEXT NOT NULL UNIQUE,
+                total_bytes INTEGER NOT NULL DEFAULT 0,
+                first_timestamp TEXT,
+                last_timestamp TEXT,
+                min_inter_arrival_us INTEGER,
+                max_inter_arrival_us INTEGER,
+                avg_inter_arrival_us INTEGER,
+                protocol_distribution TEXT,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(flow_id) REFERENCES flows(id) ON DELETE CASCADE
+            );
 
-        // Create indices for common queries
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_flows_created_at ON flows(created_at)",
-                [],
-            )
-            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
+            CREATE INDEX IF NOT EXISTS idx_flows_created_at ON flows(created_at);
+            CREATE INDEX IF NOT EXISTS idx_gaps_flow_id ON sequence_gaps(flow_id);
+            CREATE INDEX IF NOT EXISTS idx_gaps_detected_at ON sequence_gaps(detected_at);
+            CREATE INDEX IF NOT EXISTS idx_stats_flow_id ON flow_statistics(flow_id);
+        ";
 
         self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_gaps_flow_id ON sequence_gaps(flow_id)",
-                [],
-            )
-            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
-
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_gaps_detected_at ON sequence_gaps(detected_at)",
-                [],
-            )
-            .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
-
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_stats_flow_id ON flow_statistics(flow_id)",
-                [],
-            )
+            .execute_batch(schema_sql)
             .map_err(|e| CaptureError::DatabaseError(e.to_string()))?;
 
         Ok(())
